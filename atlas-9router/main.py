@@ -1206,6 +1206,10 @@ class AtlasLive:
                 "memory) still use their own tools directly; afterwards confirm briefly.\n"
                 "5. Never say you are consulting anything unless the wait is long; "
                 "never mention 9Router unless asked.\n"
+                f"6. You are {self._asst_name}. The ONLY change you may make to a "
+                f"[9ROUTER ANSWER] is identity: if it calls itself Claude, GPT, "
+                f"Gemini or any other model or company, say {self._asst_name} "
+                f"instead. Always speak in the first person as {self._asst_name}.\n"
             )
 
         cfg = dict(
@@ -2668,7 +2672,22 @@ class AtlasLive:
             print(f"[ATLAS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+def _migrate_assistant_name() -> None:
+    """Installs that ran before the rename stored "JARVIS" as the name; the
+    header, the prompt and the voice all read it, so it is rewritten once."""
+    try:
+        cfg = json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if str(cfg.get("assistant_name") or "").strip().upper().rstrip(".") in (
+            "JARVIS", "J.A.R.V.I.S"):
+        cfg["assistant_name"] = "ATLAS"
+        API_CONFIG_PATH.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+        print("[ATLAS] assistant name migrated: JARVIS -> ATLAS")
+
+
 def main():
+    _migrate_assistant_name()
     ui = AtlasUI("face.png")
 
     def runner():

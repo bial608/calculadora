@@ -4313,7 +4313,10 @@ class DevStatusBar(QWidget):
             return
         def work():
             try:
-                self._ping_sig.emit(bool(ninerouter.ping()))
+                ok = bool(ninerouter.ping())
+                if ok and not ninerouter.known_combos:
+                    ninerouter.detect()      # so the bar can mark a combo with ◈
+                self._ping_sig.emit(ok)
             except Exception:
                 self._ping_sig.emit(False)
         threading.Thread(target=work, daemon=True, name="9router-ping").start()
@@ -4342,6 +4345,7 @@ class DevStatusBar(QWidget):
                 dot = c(_TERM_AMBER, "● ...")
             mode = "text-only" if cfg.get("text_only", True) else "multimodal"
             brain = (c(_TERM_PURP, "9router") + c(_TERM_DIM, "(")
+                     + (c(_TERM_BLUE, "◈") if ninerouter.is_combo(cfg.get("model") or "") else "")
                      + c(C.TEXT, cfg.get("model") or "sem-modelo")
                      + c(_TERM_DIM, ") ") + c(_TERM_BLUE, f"[{mode}] ") + dot)
         else:
@@ -4414,7 +4418,7 @@ class DevConsole(QWidget):
             return b
 
         _b("TEST", lambda: self._run_command("/test"), "Testar conexão com o 9Router")
-        _b("MODELS", lambda: self._run_command("/models"), "Listar modelos do 9Router")
+        _b("COMBOS", lambda: self._run_command("/models"), "Detectar combos e modelos do 9Router")
         _b("9ROUTER", self.open_config.emit, "Configurar 9Router (Ctrl+9)")
         _b("CLEAR", lambda: self._out.clear(), "Limpar console")
         _b("✕", self.hide_requested.emit, "Esconder (F12)")
@@ -4580,7 +4584,8 @@ class DevConsole(QWidget):
         if name == "/help":
             for line in (
                 "/test              testa conexão com o 9Router",
-                "/models            lista modelos disponíveis",
+                "/combos            lista os combos do 9Router (e a cadeia de cada um)",
+                "/models            lista combos + modelos",
                 "/model <id>        troca o modelo (reconecta na próxima fala)",
                 "/on | /off         liga/desliga a ponte Gemini → 9Router",
                 "/ask <texto>       pergunta direto ao 9Router (sem voz)",
@@ -4595,12 +4600,18 @@ class DevConsole(QWidget):
             self._out.clear()
         elif name == "/test":
             self._bg(lambda: (ok_ if (r := ninerouter.test())[0] else bad)(r[1]))
-        elif name == "/models":
+        elif name in ("/models", "/combos"):
             def go():
-                ms = ninerouter.list_models()
-                ok_(f"{len(ms)} modelo(s):")
-                for m in ms:
-                    info("  " + m)
+                r = ninerouter.detect()
+                ok_(f"{len(r['combos'])} combo(s):")
+                for c in r["combos"]:
+                    info(f"  ◈ {c['name']:<24} " + (" → ".join(c.get("models") or []) or f"[{c['source']}]"))
+                if name == "/models":
+                    ok_(f"{len(r['models'])} modelo(s):")
+                    for m in r["models"]:
+                        info("    " + m)
+                for n in r["notes"]:
+                    bad(n)
             self._bg(go)
         elif name == "/model":
             if not arg:
@@ -4739,7 +4750,7 @@ class NineRouterOverlay(_HudOverlay):
         krow.addWidget(eye)
         lay.addLayout(krow)
 
-        lbl("MODELO  (ex.: cc/claude-sonnet-4-5, gh/gpt-5, if/kimi-k2 ou um combo)")
+        lbl("COMBO OU MODELO  (combos do 9Router aparecem primeiro, com ◈)")
         mrow = QHBoxLayout()
         self._model = QComboBox()
         self._model.setEditable(True)
@@ -4749,8 +4760,16 @@ class NineRouterOverlay(_HudOverlay):
             self._model.addItem(str(cfg["model"]))
         self._model.setCurrentText(str(cfg.get("model") or ""))
         mrow.addWidget(self._model, stretch=1)
-        mrow.addWidget(btn("LISTAR", self._list))
+        mrow.addWidget(btn("⟳ DETECTAR", self._list))
         lay.addLayout(mrow)
+        # The chain behind the selected combo — what 9Router will try, in order.
+        self._chain = QLabel(" ")
+        self._chain.setWordWrap(True)
+        self._chain.setFont(_mono(7))
+        self._chain.setStyleSheet(f"color: {_TERM_BLUE};")
+        lay.addWidget(self._chain)
+        self._combo_info: dict = {}
+        self._model.currentTextChanged.connect(self._show_chain)
 
         grid = QHBoxLayout()
         col1, col2, col3 = QVBoxLayout(), QVBoxLayout(), QVBoxLayout()
@@ -4794,6 +4813,8 @@ class NineRouterOverlay(_HudOverlay):
 
         self._test_sig.connect(self._on_test)
         self._models_sig.connect(self._on_models)
+        # Detect on open, so combos are already in the list when you look.
+        QTimer.singleShot(150, lambda: self._list(quiet=True))
 
     def _refresh_enable(self, on: bool):
         self._enable.setText("● PONTE ATIVA — o 9Router responde tudo" if on
@@ -4814,7 +4835,7 @@ class NineRouterOverlay(_HudOverlay):
             "enabled": self._enable.isChecked(),
             "base_url": self._nr.normalise_url(self._url.text()),
             "api_key": self._key.text().strip(),
-            "model": self._model.currentText().strip(),
+            "model": self._model_id(),
             "temperature": num(self._f_temperature, float, 0.4),
             "timeout": num(self._f_timeout, int, 90),
             "max_tokens": num(self._f_max_tokens, int, 1024),
@@ -4835,12 +4856,21 @@ class NineRouterOverlay(_HudOverlay):
     def _on_test(self, ok: bool, msg: str):
         self._say(("✔ " if ok else "✖ ") + msg, _TERM_GREEN if ok else _TERM_RED)
 
-    def _list(self):
-        self._say("buscando modelos…", _TERM_AMBER)
+    def _list(self, _checked=False, quiet: bool = False):
+        """Detect combos + models: API (/v1/models, /api/combos) and the local
+        ~/.9router/db.json. An empty key is filled from that database when
+        9Router runs on this machine."""
+        if not self._key.text().strip():
+            k = self._nr.local_api_key()
+            if k:
+                self._key.setText(k)
+                self._say("API key encontrada no 9Router deste computador.", _TERM_GREEN)
+        if not quiet:
+            self._say("detectando combos e modelos…", _TERM_AMBER)
         vals = self._values()
         def work():
             try:
-                self._models_sig.emit(self._nr.list_models(vals))
+                self._models_sig.emit(self._nr.detect(vals))
             except Exception as e:
                 self._models_sig.emit(e)
         threading.Thread(target=work, daemon=True).start()
@@ -4849,11 +4879,55 @@ class NineRouterOverlay(_HudOverlay):
         if isinstance(res, Exception):
             self._say(f"✖ {type(res).__name__}: {res}", _TERM_RED)
             return
-        cur = self._model.currentText()
+        from PyQt6.QtGui import QStandardItemModel
+        combos, models = res.get("combos") or [], res.get("models") or []
+        cur = self._model.currentText().strip()
+        self._combo_info = {c["name"]: c for c in combos}
+        self._model.blockSignals(True)
         self._model.clear()
-        self._model.addItems(list(res))
-        self._model.setCurrentText(cur or (res[0] if res else ""))
-        self._say(f"✔ {len(res)} modelo(s) encontrados.", _TERM_GREEN)
+
+        def header(text):
+            self._model.addItem(text)
+            it = self._model.model().item(self._model.count() - 1) \
+                if isinstance(self._model.model(), QStandardItemModel) else None
+            if it is not None:
+                it.setEnabled(False)
+
+        if combos:
+            header(f"── COMBOS ({len(combos)}) ──")
+            for c in combos:
+                self._model.addItem("◈ " + c["name"], c["name"])
+                chain = " → ".join(c.get("models") or []) or "(cadeia não informada pela API)"
+                self._model.setItemData(self._model.count() - 1, chain,
+                                        Qt.ItemDataRole.ToolTipRole)
+        if models:
+            header(f"── MODELOS ({len(models)}) ──")
+            for m in models:
+                self._model.addItem(m, m)
+        self._model.blockSignals(False)
+
+        pick = cur or (combos[0]["name"] if combos else (models[0] if models else ""))
+        self._model.setCurrentText(("◈ " + pick) if pick in self._combo_info else pick)
+        self._show_chain(self._model.currentText())
+        msg = f"✔ {len(combos)} combo(s) e {len(models)} modelo(s) detectados."
+        if res.get("notes"):
+            msg += "  ⚠ " + "; ".join(res["notes"])
+        self._say(msg, _TERM_GREEN if (combos or models) else _TERM_AMBER)
+
+    def _model_id(self, text: str = None) -> str:
+        t = (self._model.currentText() if text is None else text).strip()
+        if t.startswith("──"):
+            return ""
+        return t[2:].strip() if t.startswith("◈ ") else t
+
+    def _show_chain(self, text: str):
+        name = self._model_id(text)
+        c = self._combo_info.get(name)
+        if c is not None:
+            chain = " → ".join(c.get("models") or []) or "cadeia definida no dashboard do 9Router"
+            self._chain.setText(f"◈ combo '{name}': {chain}")
+        else:
+            self._chain.setText(" ")
 
     def _save(self):
         vals = self._values()

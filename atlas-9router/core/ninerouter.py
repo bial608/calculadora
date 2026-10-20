@@ -85,7 +85,13 @@ _SYSTEM_PROMPT = (
     "tables, no emojis, no code fences unless the user explicitly asked for "
     "code; prefer short paragraphs. If the transcript looks garbled, answer "
     "the most likely intent and say briefly what you assumed. Never invent "
-    "facts: when you do not know, say so."
+    "facts: when you do not know, say so.\n"
+    "IDENTITY: your name is {name}. You ARE {name}. If asked who or what you "
+    "are, who made you or which model you are, answer as {name}, the user's "
+    "personal assistant. Never call yourself Claude, GPT, ChatGPT, Gemini, "
+    "Llama, Qwen, DeepSeek, Kimi or any other model or company name, and never "
+    "mention 9Router, routers, combos or providers unless the user explicitly "
+    "asks about the technical setup."
 )
 
 
@@ -282,8 +288,11 @@ def clear_history() -> None:
 
 def _assistant_name() -> str:
     try:
-        return (json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        name = (json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
                 .get("assistant_name") or "ATLAS").strip()
+        if name.upper().rstrip(".") in ("JARVIS", "J.A.R.V.I.S"):
+            return "ATLAS"
+        return name
     except Exception:
         return "ATLAS"
 
@@ -493,6 +502,122 @@ def list_models(cfg: Optional[dict] = None) -> list[str]:
     return sorted({str(m.get("id")) for m in items if m.get("id")})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Combos — 9Router's named fallback chains
+# ─────────────────────────────────────────────────────────────────────────────
+# A combo is called exactly like a model (its name goes in "model"), but it is
+# a chain: 9Router tries each seat in order until one answers. Three sources,
+# merged, so they show up whichever way this machine is set up:
+#   1. GET /v1/models with the API key — combos come first, owned_by "combo"
+#      (that is what 9Router's own models route emits)
+#   2. GET /api/combos — the dashboard API: {"combos": [{name, models, kind}]}
+#   3. the local database: ${DATA_DIR}/db.json, default ~/.9router/db.json
+#      -> "combos": [{id, name, models[]}]
+# Combos of kind webSearch / webFetch are not chat models and are skipped.
+_NON_CHAT_KINDS = {"websearch", "webfetch", "image", "embedding", "tts", "stt"}
+known_combos: dict = {}      # name -> {"models": [...], "source": "..."}
+
+
+def _local_db_paths() -> list[Path]:
+    out = []
+    data_dir = os.environ.get("DATA_DIR") or _read_env_file().get("DATA_DIR")
+    if data_dir:
+        out.append(Path(data_dir).expanduser() / "db.json")
+    out.append(Path.home() / ".9router" / "db.json")
+    for env in ("APPDATA", "LOCALAPPDATA"):
+        if os.environ.get(env):
+            out.append(Path(os.environ[env]) / "9router" / "db.json")
+    return out
+
+
+def _read_local_db() -> dict:
+    for p in _local_db_paths():
+        try:
+            if p.is_file():
+                return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return {}
+
+
+def local_api_key() -> str:
+    """The first active API key in the local 9Router database, or ''.
+    Lets the panel fill the key in when 9Router runs on this machine."""
+    for k in _read_local_db().get("apiKeys") or []:
+        if isinstance(k, dict) and k.get("key") and k.get("isActive", True):
+            return str(k["key"])
+    return ""
+
+
+def _chat_combo(c: dict) -> bool:
+    return str(c.get("kind") or "llm").lower() not in _NON_CHAT_KINDS
+
+
+def detect(cfg: Optional[dict] = None) -> dict:
+    """{"combos": [{name, models, source}], "models": [ids], "notes": [str]}
+
+    Never raises: each source that fails adds a note instead, so the panel can
+    say why a list is short."""
+    import httpx
+    cfg = {**load_config(), **(cfg or {})}
+    base = normalise_url(cfg.get("base_url", ""))
+    combos: dict = {}
+    models: set = set()
+    notes: list = []
+
+    # 1. /v1/models (API key)
+    try:
+        r = httpx.get(f"{base}/models", headers=_headers(cfg), timeout=10)
+        r.raise_for_status()
+        for m in r.json().get("data") or []:
+            mid = str(m.get("id") or "")
+            if not mid:
+                continue
+            if m.get("owned_by") == "combo":
+                if _chat_combo(m):
+                    combos.setdefault(mid, {"models": [], "source": "api"})
+            else:
+                models.add(mid)
+    except httpx.HTTPStatusError as e:
+        notes.append(f"/v1/models: HTTP {e.response.status_code}"
+                     + (" (API key recusada)" if e.response.status_code in (401, 403) else ""))
+    except Exception as e:
+        notes.append(f"/v1/models: {type(e).__name__}")
+
+    # 2. dashboard API
+    try:
+        r = httpx.get(f"{_root_url(cfg.get('base_url', ''))}/api/combos",
+                      headers=_headers(cfg), timeout=5)
+        if r.status_code < 400:
+            for c in (r.json() or {}).get("combos") or []:
+                if isinstance(c, dict) and c.get("name") and _chat_combo(c):
+                    e = combos.setdefault(str(c["name"]), {"models": [], "source": "dashboard"})
+                    e["models"] = [str(x) for x in (c.get("models") or []) if isinstance(x, str)]
+    except Exception:
+        pass
+
+    # 3. local db.json
+    db = _read_local_db()
+    for c in db.get("combos") or []:
+        if isinstance(c, dict) and c.get("name") and _chat_combo(c):
+            e = combos.setdefault(str(c["name"]), {"models": [], "source": "local"})
+            if not e["models"]:
+                e["models"] = [str(x) for x in (c.get("models") or []) if isinstance(x, str)]
+
+    models -= set(combos)
+    known_combos.clear()
+    known_combos.update(combos)
+    out = {"combos": [{"name": n, **v} for n, v in sorted(combos.items())],
+           "models": sorted(models), "notes": notes}
+    _emit("info", text=f"detect: {len(combos)} combo(s), {len(models)} modelo(s)"
+                       + (f" · {'; '.join(notes)}" if notes else ""))
+    return out
+
+
+def is_combo(name: str) -> bool:
+    return bool(name) and name in known_combos
+
+
 def ping(cfg: Optional[dict] = None) -> bool:
     """Cheap liveness check for the status bar. Never raises."""
     import httpx
@@ -530,9 +655,17 @@ def test(cfg: Optional[dict] = None) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
     ms = int((time.monotonic() - t0) * 1000)
     model = str(cfg.get("model") or "").strip()
+    try:
+        found = detect(cfg)
+        names = set(found["models"]) | {c["name"] for c in found["combos"]}
+        n_c = len(found["combos"])
+    except Exception:
+        names, n_c = set(models), 0
+    summary = f"{n_c} combo(s) + {len(names) - n_c} modelo(s)"
     if not model:
-        return True, f"Conectado em {ms} ms — {len(models)} modelo(s). Escolha um modelo."
-    if models and model not in models:
-        return False, (f"Conectado, mas o modelo '{model}' não existe aí. "
-                       f"Use LISTAR para ver os {len(models)} disponíveis.")
-    return True, f"Conectado em {ms} ms · modelo '{model}' OK · {len(models)} disponíveis."
+        return True, f"Conectado em {ms} ms — {summary}. Escolha um combo ou modelo."
+    if names and model not in names:
+        return False, (f"Conectado, mas '{model}' não existe aí. "
+                       f"Use DETECTAR para ver os {summary}.")
+    kind = "combo" if is_combo(model) else "modelo"
+    return True, f"Conectado em {ms} ms · {kind} '{model}' OK · {summary}."

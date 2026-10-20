@@ -53,17 +53,29 @@ def main() -> None:
 
     from core import ninerouter
     nr["base_url"] = ninerouter.normalise_url(nr["base_url"])
-    models = []
-    try:
-        models = ninerouter.list_models(nr)
-        print(f"{G}✔ conectado — {len(models)} modelo(s){X}")
-        for i, m in enumerate(models[:40], 1):
+    if not nr["api_key"]:
+        k = ninerouter.local_api_key()
+        if k:
+            nr["api_key"] = k
+            print(f"{G}✔ API key encontrada no 9Router deste computador{X}")
+    found = ninerouter.detect(nr)
+    combos = [c["name"] for c in found["combos"]]
+    models = combos + found["models"]
+    if combos:
+        print(f"{G}✔ {len(combos)} combo(s){X}")
+        for i, c in enumerate(found["combos"], 1):
+            chain = " → ".join(c.get("models") or [])
+            print(f"   {D}{i:>2}.{X} ◈ {c['name']}" + (f"  {D}{chain}{X}" if chain else ""))
+    if found["models"]:
+        print(f"{G}✔ {len(found['models'])} modelo(s){X}")
+        for i, m in enumerate(found["models"][:40], len(combos) + 1):
             print(f"   {D}{i:>2}.{X} {m}")
-    except Exception as e:
-        print(f"{Y}! não consegui listar modelos agora ({type(e).__name__}: {e}){X}")
-        print(f"{D}  dá pra configurar depois no app (Ctrl+9){X}")
+    for n in found["notes"]:
+        print(f"{Y}! {n}{X}")
+    if not models:
+        print(f"{D}  nada detectado agora — dá pra configurar depois no app (Ctrl+9){X}")
 
-    pick = ask("Modelo (nome ou número)", nr.get("model", ""))
+    pick = ask("Combo ou modelo (nome ou número)", nr.get("model", ""))
     if pick.isdigit() and models and 1 <= int(pick) <= len(models):
         pick = models[int(pick) - 1]
     nr["model"] = pick

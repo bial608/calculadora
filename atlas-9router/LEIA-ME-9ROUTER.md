@@ -58,6 +58,35 @@ ou dentro do app com **Ctrl+9**.
 
 macOS / Linux: `./iniciar_atlas.sh`
 
+## Combos do 9Router
+
+Os combos (cadeias de fallback criadas no dashboard) são detectados sozinhos e aparecem
+**no topo da lista**, marcados com ◈, antes dos modelos avulsos. Ao escolher um, o painel
+mostra a cadeia: `◈ combo 'premium-coding': cc/claude-sonnet-4-5 → gh/gpt-5 → if/kimi-k2`.
+
+Três fontes, somadas:
+
+| fonte | o quê |
+|---|---|
+| `GET /v1/models` com a API key | combos vêm com `owned_by: "combo"` |
+| `GET /api/combos` (API do dashboard) | nome + cadeia de modelos |
+| `~/.9router/db.json` (ou `DATA_DIR/db.json`) | combos salvos neste computador, mesmo sem a API responder |
+
+Se o campo API KEY estiver vazio e o 9Router rodar neste PC, a primeira key ativa do
+`db.json` é preenchida automaticamente. Combos de busca web (`webSearch`/`webFetch`) ficam de
+fora, porque não são modelos de chat. A detecção roda ao abrir o painel (Ctrl+9), no botão
+**⟳ DETECTAR**, no `configurar.py` e com `/combos` ou `/models` no console. A barra de status
+marca o combo ativo com ◈.
+
+## Identidade: ATLAS
+
+- O prompt do Gemini diz "Your name is ATLAS".
+- O prompt do 9Router manda responder como ATLAS e nunca se chamar Claude, GPT, Gemini, Kimi etc.,
+  nem citar 9Router/combos/providers sem você perguntar.
+- A regra de relay permite ao Gemini uma única alteração na resposta: trocar qualquer
+  auto-identificação de outro modelo por ATLAS.
+- Instalações antigas com `"assistant_name": "JARVIS"` são migradas para ATLAS ao ligar.
+
 ## Onde ficam as configurações
 
 `config/api_keys.json` → bloco `"ninerouter"` (veja `config/api_keys.example.json`).
@@ -80,8 +109,8 @@ resolve primeiro para IPv6 e o servidor pode recusar).
 |---|---|
 | Barra abaixo do cabeçalho | prompt de shell ao vivo: `λ atlas@mark-lvi:~/core$ ears=gemini → brain=9router(modelo) ● ONLINE` + latência, nº de requisições, erros, tokens, uptime, versão do Python e PID |
 | Rodapé da coluna central | **Dev Console** (F12): estilo terminal, mostra cada `POST /chat/completions`, a resposta, o tempo, os tokens, cada ferramenta chamada e o log da conversa |
-| Linha de comando do console | `/help` `/test` `/models` `/model <id>` `/on` `/off` `/textonly on\|off` `/ask <texto>` `/config` `/history clear` `/clear` — texto sem `/` vai pro assistente |
-| ⚙ Setup | botão **⌁ 9ROUTER BRAIN** (Ctrl+9): liga/desliga a ponte, endereço, API key, modelo (com LISTAR), temperatura, timeout, max tokens, instruções extras, TESTAR |
+| Linha de comando do console | `/help` `/test` `/combos` `/models` `/model <id>` `/on` `/off` `/textonly on\|off` `/ask <texto>` `/config` `/history clear` `/clear` — texto sem `/` vai pro assistente |
+| ⚙ Setup | botão **⌁ 9ROUTER BRAIN** (Ctrl+9): liga/desliga a ponte, endereço, API key, combo/modelo (com DETECTAR), temperatura, timeout, max tokens, instruções extras, TESTAR |
 | 🎛 Controls | botão **▣ DEV CONSOLE** |
 
 ## Arquivos novos / alterados
@@ -99,7 +128,7 @@ resolve primeiro para IPv6 e o servidor pode recusar).
 
 - **● OFFLINE na barra** → o 9Router não está rodando (`npx 9router`) ou o endereço está errado.
 - **"recusou a API key"** → copie de novo a chave em Dashboard → API Keys.
-- **"modelo não existe"** → use LISTAR / `/models` e escolha um id exato (ou um *combo* criado no 9Router).
+- **"não existe aí"** → use ⟳ DETECTAR / `/combos` e escolha um combo ou modelo da lista.
 - **Imagens não são entendidas** → o modelo escolhido no 9Router precisa aceitar visão.
 - **Gemini às vezes responde sozinho** → é um modelo de voz seguindo instrução; a regra está
   reforçada no fim do prompt. Se acontecer, diga "pergunta pro cérebro" ou use `/ask` no console.
