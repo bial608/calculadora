@@ -143,3 +143,42 @@ em todos os arquivos (classes `AtlasLive`, `AtlasUI`, pastas `~/.atlas_profiles`
 pré-treinado `hey_jarvis` do openwakeword; não existe modelo pronto de "Hey Atlas", e renomear
 quebraria a detecção. Se quiser "Hey Atlas", é preciso treinar um modelo próprio no openwakeword
 e trocar `WAKE_MODEL` em `core/wake_word.py`.
+
+## Plugin Obsidian Brain (memória + prints)
+
+`plugins/obsidian_brain.py` — ligado por padrão. Detecta sozinho o vault que está aberto
+no Obsidian (ou use ⚙ → PLUGIN SETTINGS → *Obsidian Brain* → caminho do vault → TESTAR VAULT).
+
+```
+<vault>/ATLAS/
+  Conversas/2026-10-20 19-30 Conversa.md   transcrição ao vivo + Resumo, Problemas e soluções
+                                            (tabela problema → como foi resolvido → status),
+                                            Decisões, Pendências, [[Tópicos]]
+  Conhecimento/<Assunto>.md                 nota criada quando o assunto ainda não existia;
+                                            conversas seguintes sobre ele são acrescentadas
+  Atividade/2026-10-20.md                   o que você fez na tela, a cada 15 min, com miniaturas
+  Prints/2026-10-20/19-33-00.jpg            1 print a cada 3 min (apagados após 14 dias)
+  Perfil.md                                 quem você é, rotina, ferramentas, projetos,
+                                            preferências e como o ATLAS pode ajudar melhor
+```
+
+**Antes de cada pergunta**, o vault inteiro é buscado só por **títulos, cabeçalhos, tags e
+aliases**, num índice em memória atualizado pela data dos arquivos, sem varrer o texto.
+Medido: 2.000 notas em cerca de 60 ms. Só as **seções** que batem vão para o 9Router, junto com o
+resumo do seu Perfil. O Gemini usa a mesma busca pela ferramenta `obsidian_brain`, então os
+dois veem a mesma memória. Se nada bater, a resposta vira uma nota nova.
+
+**Resumo da conversa**: feito pelo 9Router (ou pelo Gemini, se a ponte estiver desligada) ao
+fechar o ATLAS. Se o app cair, a transcrição já está salva e o resumo é feito ao ligar de novo.
+
+**Prints**: o Gemini descreve 5 prints de uma vez, ou seja, 1 chamada a cada 15 min, não a cada
+print. Telas iguais não são salvas. Os prints **pausam sozinhos** se o título da janela ativa
+tiver *senha, password, banco, bank, pix, cartão, 1password, bitwarden, keepass, anônima…*
+(dá para editar a lista). Por voz: "pausa os prints" / "volta os prints".
+⚠ Os prints ficam dentro do vault: se ele sincroniza (Obsidian Sync, iCloud, Drive), os prints
+vão junto.
+
+Suas próprias notas **nunca são editadas**, só lidas e linkadas. O ATLAS só altera notas que
+ele mesmo criou (`source: atlas` no frontmatter).
+
+Como escrever outros plugins: veja `PLUGINS-COMO-FAZER.md`.

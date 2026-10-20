@@ -1,6 +1,15 @@
 """
 Plugin discovery, validation, collision detection, and dispatch.
 
+LIFECYCLE HOOKS (optional, module-level, all of them):
+    on_load(ctx)            once, after the session object exists. ctx is a dict:
+                            player, speak, base_dir, log
+    on_turn(user, reply)    after every finished exchange (user text, assistant
+                            text). Called on a worker thread — never blocks audio.
+    on_shutdown()           when ATLAS closes. Keep it short; it runs with a
+                            deadline (the window is already gone).
+A hook that raises is logged and skipped; it never takes ATLAS down.
+
 Discovery runs once (AtlasLive.__init__ calls discover_plugins()); the resulting
 PluginRegistry is cached for the process lifetime. Enable/disable state is re-read
 from config on every call to get_tool_declarations() / run() / list_for_ui(), so
@@ -69,6 +78,10 @@ class PluginRecord:
     #          is in force. Nothing is deleted: Gemini still gets the full text.
     tier: Optional[str] = None
     brief: Optional[str] = None
+    hooks: dict = field(default_factory=dict)   # on_load / on_turn / on_shutdown
+
+
+_HOOK_NAMES = ("on_load", "on_turn", "on_shutdown")
 
 
 class PluginRegistry:
@@ -107,6 +120,40 @@ class PluginRegistry:
 
     def has(self, name: str) -> bool:
         return name in self._plugins
+
+    # -- lifecycle hooks (see module docstring) --
+    def _call_hook(self, hook: str, *args) -> None:
+        for name, rec in self._plugins.items():
+            fn = rec.hooks.get(hook)
+            if fn is None or not get_plugin_enabled(name):
+                continue
+            try:
+                fn(*args)
+            except Exception as e:
+                self._logger(f"Plugin '{name}' {hook}() failed: {e}")
+                traceback.print_exc()
+
+    def start(self, ctx: dict) -> None:
+        self._call_hook("on_load", ctx)
+
+    def turn(self, user_text: str, reply_text: str) -> None:
+        """Fire-and-forget: the receive loop must never wait on a plugin."""
+        if not any(r.hooks.get("on_turn") for r in self._plugins.values()):
+            return
+        import threading
+        threading.Thread(target=self._call_hook,
+                         args=("on_turn", user_text, reply_text),
+                         daemon=True, name="plugin-on-turn").start()
+
+    def shutdown(self, timeout: float = 45.0) -> None:
+        """Run every on_shutdown with one shared deadline, then return."""
+        if not any(r.hooks.get("on_shutdown") for r in self._plugins.values()):
+            return
+        import threading
+        t = threading.Thread(target=self._call_hook, args=("on_shutdown",),
+                             daemon=True, name="plugin-on-shutdown")
+        t.start()
+        t.join(timeout)
 
     def scheduling(self, name: str) -> Optional[str]:
         """How this plugin's result should re-enter the conversation, if it said."""
@@ -216,8 +263,12 @@ def _validate(module, filename: str) -> PluginRecord:
     if not (isinstance(settings, dict) and isinstance(settings.get("fields"), list)):
         settings = None
 
+    hooks = {h: getattr(module, h) for h in _HOOK_NAMES
+             if callable(getattr(module, h, None))}
+
     return PluginRecord(name=name, description=description.strip(), parameters=parameters,
                          run=run_fn, file=filename, valid=True, error="", settings=settings,
+                         hooks=hooks,
                          behavior=_opt_upper(plugin_meta.get("behavior"), _BEHAVIORS),
                          scheduling=_opt_upper(plugin_meta.get("scheduling"), _SCHEDULING),
                          tier=_opt_tier(plugin_meta.get("tier")),

@@ -688,6 +688,12 @@ class AtlasLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        # Plugin lifecycle: on_load now; on_turn per exchange; on_shutdown on exit.
+        self._pending_user_turn = ""
+        self._plugin_registry.start({
+            "player": self.ui, "speak": self.speak, "base_dir": _base_dir,
+            "log": lambda msg: print(f"[Plugins] {msg}"),
+        })
 
         # 9Router bridge: every request/answer/error goes to the dev console.
         ninerouter.add_listener(self.ui.dev_event)
@@ -940,6 +946,7 @@ class AtlasLive:
             self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
         ninerouter.note_heard(text)
+        self._pending_user_turn = text
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -1430,6 +1437,7 @@ class AtlasLive:
                         except Exception:
                             pass
                     await asyncio.sleep(1.5)
+                    await asyncio.to_thread(self._plugin_registry.shutdown)
                     import os as _os
                     _os._exit(0)
                 asyncio.create_task(_do_shutdown())
@@ -1751,6 +1759,7 @@ class AtlasLive:
                                 self._last_out_logged = ""   # new exchange
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
+                                self._pending_user_turn = full_in
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",
@@ -1770,6 +1779,8 @@ class AtlasLive:
                                 self._last_out_logged = full_out
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
+                                self._plugin_registry.turn(self._pending_user_turn, full_out)
+                                self._pending_user_turn = ""
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "atlas",
@@ -2690,9 +2701,12 @@ def main():
     _migrate_assistant_name()
     ui = AtlasUI("face.png")
 
+    holder = {}
+
     def runner():
         ui.wait_for_api_key()
         atlas = AtlasLive(ui)
+        holder["atlas"] = atlas
         try:
             asyncio.run(atlas.run())
         except KeyboardInterrupt:
@@ -2700,6 +2714,12 @@ def main():
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()
+    # Window closed: give plugins (e.g. obsidian_brain saving the session) a
+    # bounded moment to finish before the process ends.
+    atlas = holder.get("atlas")
+    if atlas is not None:
+        print("[ATLAS] closing — letting plugins save…")
+        atlas._plugin_registry.shutdown()
 
 if __name__ == "__main__":
     main()

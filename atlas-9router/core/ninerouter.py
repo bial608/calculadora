@@ -225,9 +225,43 @@ stats = {
 }
 
 
+# Plugins can feed every request and learn from every answer:
+#   context provider  (request) -> str | ""   text added as [CONTEXT ...]
+#   answer hook       (request, answer) -> None, called after a good answer
+_context_providers: list = []
+_answer_hooks: list = []
+
+
+def add_context_provider(fn) -> None:
+    if fn not in _context_providers:
+        _context_providers.append(fn)
+
+
+def add_answer_hook(fn) -> None:
+    if fn not in _answer_hooks:
+        _answer_hooks.append(fn)
+
+
+def gather_context(request: str) -> str:
+    parts = []
+    for fn in list(_context_providers):
+        try:
+            t = fn(request)
+            if t:
+                parts.append(str(t).strip())
+        except Exception as e:
+            _emit("error", text=f"context provider failed: {e}")
+    return "\n\n".join(parts)
+
+
 def add_listener(fn: Callable[[dict], None]) -> None:
     if fn not in _listeners:
         _listeners.append(fn)
+
+
+def emit(kind: str, **data) -> None:
+    """Public: plugins write to the dev console through this."""
+    _emit(kind, **data)
 
 
 def _emit(kind: str, **data) -> None:
@@ -424,6 +458,10 @@ def ask(request: str, raw_heard: str = "", images: Optional[list] = None,
         extra_text = (extra_text + "\n\n" if extra_text else "") + \
             "[MEDIA DECODED TO TEXT — exact transcription of what is on screen/in the file]\n" + decoded
 
+    ctx = gather_context(request)
+    if ctx:
+        extra_text = (extra_text + "\n\n" if extra_text else "") + ctx
+
     msgs = _build_messages(cfg, request, raw_heard, images, extra_text)
     payload = {
         "model": model,
@@ -486,7 +524,40 @@ def ask(request: str, raw_heard: str = "", images: Optional[list] = None,
     _history.append((request.strip(), answer))
     _emit("response", id=rid, ms=ms, model=stats["last_model"], text=answer,
           usage=usage)
+    for fn in list(_answer_hooks):
+        try:
+            fn(request, answer)
+        except Exception as e:
+            _emit("error", text=f"answer hook failed: {e}")
     return answer
+
+
+def complete(prompt: str, system: str = "", timeout: float = 120) -> str:
+    """One plain text completion for housekeeping (summaries, titles, profile).
+    No history, no context providers, no answer hooks — so a plugin calling it
+    can never trigger itself. Raises on failure."""
+    import httpx
+    cfg = load_config()
+    model = str(cfg.get("model") or "").strip()
+    if not model:
+        raise RuntimeError("no 9Router model configured")
+    msgs = ([{"role": "system", "content": system}] if system else []) + \
+           [{"role": "user", "content": prompt}]
+    t0 = time.monotonic()
+    r = httpx.post(f"{normalise_url(cfg.get('base_url', ''))}/chat/completions",
+                   json={"model": model, "messages": msgs, "stream": False,
+                         "temperature": 0.3},
+                   headers=_headers(cfg), timeout=timeout)
+    r.raise_for_status()
+    msg = (r.json().get("choices") or [{}])[0].get("message") or {}
+    content = msg.get("content")
+    if isinstance(content, list):
+        content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    out = _strip_think(content or "")
+    _emit("info", text=f"complete() {int((time.monotonic() - t0) * 1000)}ms → {len(out)} chars")
+    if not out:
+        raise RuntimeError("empty completion")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
