@@ -48,12 +48,75 @@
     font-size:38px; color:#fff; background:rgba(255,200,40,.28); backdrop-filter:blur(2px); touch-action:none; }
   #boost.on { background:rgba(255,200,40,.7); transform:scale(.94); }
   body.touch.playing #boost { display:flex; }
+  #menu { z-index:5; }
+  .hidden { display:none !important; }
+  .btn { padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0d1424; color:var(--txt);
+    font-size:13.5px; font-weight:600; cursor:pointer; min-height:42px; font-family:inherit; }
+  .btn:active { transform:scale(.97); }
+  .btn.pri { background:linear-gradient(90deg,#39ff88,#8dffb8); color:#04210f; border:0; }
+  .btn.warn { border-color:#7a2c3a; color:#ff8a9c; }
+  #gear { position:fixed; top:calc(8px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); z-index:15;
+    width:42px; height:42px; border-radius:50%; border:1px solid var(--line); background:rgba(13,20,36,.75); color:#fff;
+    font-size:20px; display:none; align-items:center; justify-content:center; opacity:.65; cursor:pointer; padding:0; }
+  #gear.on { display:flex; }
+  #pw { position:fixed; inset:0; z-index:30; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(0,0,0,.7); }
+  #pw .card { width:min(340px,100%); }
+  #pw h3 { margin:0 0 12px; }
+  #pwErr { min-height:20px; margin:8px 0 0; font-size:13px; color:#ff6b81; }
+  #pw .btns { display:flex; gap:8px; margin-top:8px; } #pw .btns .btn { flex:1; }
+  #admin { position:fixed; z-index:20; top:0; right:0; bottom:0; width:min(410px,100vw); display:flex; flex-direction:column;
+    background:rgba(20,27,45,.97); border-left:1px solid var(--line); box-shadow:-10px 0 40px rgba(0,0,0,.45);
+    transform:translateX(105%); transition:transform .2s; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+  #admin.open { transform:none; }
+  #admin header { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); }
+  #admin header h2 { margin:0; font-size:17px; flex:1; }
+  #adminStats { padding:8px 14px 0; font-size:12px; color:var(--mut); font-family:ui-monospace,Menlo,monospace; }
+  #adminMsg { padding:2px 14px; min-height:18px; font-size:12px; color:var(--acc); }
+  #adminBody { overflow-y:auto; flex:1; padding:6px 14px 28px; touch-action:pan-y; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  #admin input { user-select:text; -webkit-user-select:text; }
+  .acts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0 12px; }
+  #admin details { border:1px solid var(--line); border-radius:12px; margin-bottom:10px; background:#0f1626; }
+  #admin summary { padding:12px 14px; font-weight:700; cursor:pointer; list-style:none; display:flex; justify-content:space-between; min-height:44px; align-items:center; }
+  #admin summary::after { content:'▾'; color:var(--mut); } #admin details[open] summary::after { content:'▴'; }
+  #admin .grp { padding:2px 14px 12px; }
+  .row { padding:8px 0; border-top:1px solid rgba(38,50,77,.6); }
+  .row:first-child { border-top:0; }
+  .row label { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13.5px; margin-bottom:4px; }
+  .row .hint { font-size:11px; color:var(--mut); margin-bottom:4px; }
+  .ctl { display:flex; gap:10px; align-items:center; }
+  .ctl input[type=range] { flex:1; min-width:0; height:30px; accent-color:var(--acc); }
+  .ctl input[type=number] { width:78px; padding:8px 6px; border-radius:8px; border:1px solid var(--line); background:#0d1424; color:var(--txt); font-size:14px; text-align:center; }
+  .row.bool { display:flex; justify-content:space-between; align-items:center; gap:10px; min-height:44px; }
+  .row.bool label { margin:0; flex:1; }
+  .sw { appearance:none; -webkit-appearance:none; width:48px; height:28px; border-radius:14px; background:#2a3550; position:relative; cursor:pointer; flex:none; transition:background .15s; }
+  .sw::after { content:''; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; transition:left .15s; }
+  .sw:checked { background:#27c768; } .sw:checked::after { left:23px; }
+  @media (max-width:700px){
+    #admin { top:auto; left:0; width:100%; height:82vh; height:82dvh; border-left:0; border-top:1px solid var(--line); border-radius:18px 18px 0 0; transform:translateY(105%); }
+    #admin.open { transform:none; }
+  }
   #pbtn { position:fixed; left:50%; bottom:calc(10px + env(safe-area-inset-bottom)); transform:translateX(-50%); display:none; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="boost">⚡</div>
+<button id="gear" aria-label="Painel admin">⚙</button>
+
+<div id="pw" class="hidden">
+  <div class="card">
+    <h3>Acesso restrito</h3>
+    <input id="pwIn" type="password" placeholder="Senha" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div id="pwErr"></div>
+    <div class="btns"><button class="btn" id="pwCancel">Cancelar</button><button class="btn pri" id="pwOk">Entrar</button></div>
+  </div>
+</div>
+
+<aside id="admin" aria-label="Painel admin">
+  <header><h2>⚙ Painel Admin</h2><button class="btn warn" id="admLock">Bloquear</button><button class="btn" id="admClose" aria-label="Fechar">✕</button></header>
+  <div id="adminStats"></div><div id="adminMsg"></div>
+  <div id="adminBody"></div>
+</aside>
 
 <div id="menu">
   <div class="card">
@@ -86,14 +149,26 @@
 
 /* ============ Configuração ============ */
 const TAU = Math.PI * 2;
-const ARENA_R = 3000;             // raio da arena
-const CELL = 120, DIM = 64, OFF = 32;   // grade espacial
+const CELL = 120, DIM = 64, OFF = 32;   // grade espacial (cobre arenas de até ~3800 de raio)
 const COARSE = matchMedia('(pointer:coarse)').matches;
-const BOT_COUNT = COARSE ? 16 : 26;
-const FOOD_TARGET = COARSE ? 1800 : 2600;
-const BASE_SPEED = 2.7, BOOST_SPEED = 5.4;   // px por tick (1 tick = 1/60 s)
-const BOOST_COST = 0.05, MIN_BOOST_MASS = 10, START_MASS = 15;
-const WALL_DROPS_FOOD = false;    // pesquisa indica que morrer na parede não deixa orbes
+const ADMIN_HASH = '1e986tctd38';       // hash da senha do painel admin (não é segurança real: tudo roda no seu navegador)
+
+// Todos os parâmetros ajustáveis pelo painel admin. Velocidades em px por tick (1 tick = 1/60 s).
+const DEFAULTS = {
+  // jogador
+  speed:2.7, boostSpeed:5.4, turnRate:0.11, boostCost:0.05, infBoost:false, minBoost:10, startMass:15,
+  bodyScale:1, segPerMass:0.8, magnet:1, god:false, selfCollide:false,
+  // bots
+  botCount: COARSE ? 16 : 26, botSpeed:1, botAggr:0.45, botTurn:1, botReaction:10, botVision:380,
+  botMassMin:15, botMassMax:40, botBig:0.2, botRespawn:3.5,
+  // mundo
+  arenaR:3000, foodTarget: COARSE ? 1800 : 2600, foodValue:1, deathDrop:0.85,
+  wallKills:true, wallDrops:false, timeScale:1,
+  // câmera / interface
+  zoom:1, autoZoom:true, showNames:true, showMinimap:true, showRanking:true, showGrid:true, showFps:false, pauseOnPanel:true,
+};
+const CFG = Object.assign({}, DEFAULTS);
+let ARENA_R = CFG.arenaR;
 
 const SKINS = [
   { n:'Neon',      c:['#39ff88','#12c764'] },
@@ -121,6 +196,15 @@ const store = {
   get(k,d){ try { const v = localStorage.getItem(k); return v===null?d:v; } catch(e){ return d; } },
   set(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 };
+
+function saveCfg(){ store.set('cobrinha.cfg', JSON.stringify(CFG)); }
+(function loadCfg(){
+  try {
+    const sv = JSON.parse(store.get('cobrinha.cfg','{}'));
+    for (const k in DEFAULTS) if (typeof sv[k] === typeof DEFAULTS[k] && (typeof sv[k] !== 'number' || isFinite(sv[k]))) CFG[k] = sv[k];
+    ARENA_R = CFG.arenaR;
+  } catch(e){}
+})();
 
 /* ============ Canvas ============ */
 const cvs = $('c'), ctx = cvs.getContext('2d');
@@ -189,22 +273,22 @@ function addFood(x, y, v, col){
 function spawnRegularFood(){
   const a = Math.random()*TAU, d = Math.sqrt(Math.random())*(ARENA_R-40);
   const big = Math.random() < 0.05;
-  const v = big ? rnd(2.5,4) : rnd(0.6,1.6);
+  const v = (big ? rnd(2.5,4) : rnd(0.6,1.6)) * CFG.foodValue;
   addFood(Math.cos(a)*d, Math.sin(a)*d, v, `hsl(${FOOD_HUES[(Math.random()*FOOD_HUES.length)|0]},100%,62%)`);
 }
-for (let i=0;i<FOOD_TARGET;i++) spawnRegularFood();
+for (let i=0;i<CFG.foodTarget;i++) spawnRegularFood();
 
 /* ============ Cobras ============ */
-const segCountFor = m => Math.min(1000, Math.floor(6 + m*0.8));
+const segCountFor = m => Math.min(1200, Math.floor(6 + m*CFG.segPerMass));
 function updateDims(s){
-  s.r = Math.min(26, 8 + Math.sqrt(s.mass)*0.55);
+  s.r = Math.min(26, 8 + Math.sqrt(s.mass)*0.55) * CFG.bodyScale;
   s.space = s.r*0.55;
 }
 function makeSnake(name, skin, mass, x, y, isPlayer){
   const ang = rnd(0,TAU);
   const s = { name, skin, isPlayer, angle:ang, target:ang, mass, r:0, space:0, segs:[],
     boost:false, boosting:false, boostAcc:0, alive:true, kills:0,
-    turnMul: isPlayer?1:rnd(0.8,1.1), aggr: Math.random()<0.45, thinkT: rnd(0,10), wander: ang };
+    turnMul: isPlayer?1:rnd(0.8,1.1), aggrRoll: Math.random(), thinkT: rnd(0,10), wander: ang };
   updateDims(s);
   const n = segCountFor(mass);
   for (let i=0;i<n;i++) s.segs.push({ x:x-Math.cos(ang)*i*s.space, y:y-Math.sin(ang)*i*s.space, o:s, h:i===0 });
@@ -222,7 +306,8 @@ function findSpawn(){
 function spawnBot(){
   const [x,y] = findSpawn();
   const skin = SKINS[(Math.random()*SKINS.length)|0];
-  const mass = Math.random()<0.2 ? rnd(40,150) : rnd(START_MASS, 40);
+  const lo = Math.min(CFG.botMassMin, CFG.botMassMax), hi = Math.max(CFG.botMassMin, CFG.botMassMax);
+  const mass = Math.random() < CFG.botBig ? rnd(hi, hi*4) : rnd(lo, hi);
   makeSnake(BOT_NAMES[(Math.random()*BOT_NAMES.length)|0], skin, mass, x, y, false);
 }
 
@@ -232,9 +317,9 @@ function kill(s, killer, wall){
   if (!s.alive) return;
   s.alive = false;
   const idx = snakes.indexOf(s); if (idx>=0) snakes.splice(idx,1);
-  if (!wall || WALL_DROPS_FOOD){
+  if (!wall || CFG.wallDrops){
     const n = s.segs.length, count = Math.min(90, Math.max(8, (n/1.5)|0));
-    const total = s.mass*0.85;
+    const total = s.mass*CFG.deathDrop;
     for (let k=0;k<count;k++){
       const seg = s.segs[Math.min(n-1, (k*n/count)|0)];
       const v = Math.max(0.5, total/count*rnd(0.7,1.3));
@@ -247,10 +332,10 @@ function kill(s, killer, wall){
   }
   if (s.isPlayer){
     state = 'dead';
-    killerName = wall ? 'a borda da arena' : (killer ? killer.name : '');
+    killerName = wall ? 'a borda da arena' : (killer ? (killer===s ? 'você mesmo' : killer.name) : '');
     setTimeout(showResult, 900);
   } else {
-    respawns.push(worldT + rnd(2,5));
+    respawns.push(worldT + CFG.botRespawn*rnd(0.6,1.4));
   }
 }
 
@@ -279,8 +364,15 @@ function buildSegGrid(){
 function checkCollisions(){
   const deaths = [];
   for (const s of snakes){
+    if (s.isPlayer && CFG.god) continue;
     const h = s.segs[0];
     if (Math.hypot(h.x,h.y) > ARENA_R - s.r*0.5){ deaths.push([s,null,true]); continue; }
+    if (CFG.selfCollide){
+      const sg = s.segs, from = Math.ceil(s.r*3/s.space)+4, rr2 = s.r*s.r*0.8;
+      let self = false;
+      for (let i=from;i<sg.length;i++){ const dx=sg[i].x-h.x, dy=sg[i].y-h.y; if (dx*dx+dy*dy < rr2){ self = true; break; } }
+      if (self){ deaths.push([s,s,false]); continue; }
+    }
     const cx = ci(h.x), cy = ci(h.y);
     let hit = null;
     for (let gy=Math.max(0,cy-1); gy<=Math.min(DIM-1,cy+1) && !hit; gy++)
@@ -299,7 +391,7 @@ function checkCollisions(){
 
 /* ============ Comer ============ */
 function eatFood(s, k){
-  const h = s.segs[0], M = s.r*2 + 28, M2 = M*M;
+  const h = s.segs[0], M = (s.r*2 + 28)*CFG.magnet, M2 = M*M;
   const x0=ci(h.x-M), x1=ci(h.x+M), y0=ci(h.y-M), y1=ci(h.y+M);
   for (let gy=y0; gy<=y1; gy++)
     for (let gx=x0; gx<=x1; gx++){
@@ -327,14 +419,14 @@ function updateFlying(k){
 /* ============ Movimento ============ */
 function stepSnake(s, k){
   const diff = angDiff(s.target, s.angle);
-  const maxT = 0.11*s.turnMul/(1 + (s.r-8)*0.03)*k;
+  const maxT = CFG.turnRate*(s.isPlayer?1:CFG.botTurn)*s.turnMul/(1 + (s.r-8)*0.03)*k;
   s.angle += clamp(diff, -maxT, maxT);
 
-  s.boosting = s.boost && s.mass > MIN_BOOST_MASS;
-  let sp = BASE_SPEED;
+  s.boosting = s.boost && (s.mass > CFG.minBoost || (s.isPlayer && CFG.infBoost));
+  let sp = CFG.speed;
   if (s.boosting){
-    sp = BOOST_SPEED;
-    const cost = BOOST_COST*k;
+    sp = CFG.boostSpeed;
+    const cost = (s.isPlayer && CFG.infBoost) ? 0 : CFG.boostCost*k;
     s.mass -= cost; s.boostAcc += cost;
     if (s.boostAcc >= 0.6){
       const t = s.segs[s.segs.length-1];
@@ -344,8 +436,13 @@ function stepSnake(s, k){
   }
   updateDims(s);
 
+  if (!s.isPlayer) sp *= CFG.botSpeed;
   const sg = s.segs, h = sg[0];
   h.x += Math.cos(s.angle)*sp*k; h.y += Math.sin(s.angle)*sp*k;
+  if (!CFG.wallKills || (s.isPlayer && CFG.god)){   // sem morte na borda: desliza pela parede
+    const d = Math.hypot(h.x,h.y), lim = ARENA_R - s.r;
+    if (d > lim){ h.x *= lim/d; h.y *= lim/d; }
+  }
 
   const want = segCountFor(s.mass);
   while (sg.length < want){ const t = sg[sg.length-1]; sg.push({ x:t.x, y:t.y, o:s, h:false }); }
@@ -367,7 +464,7 @@ function think(b){
   if (dist0 > ARENA_R*0.8) want = Math.atan2(-h.y,-h.x);
 
   // comida mais valiosa por perto
-  const M = 380, rc = Math.ceil(M/CELL);
+  const M = CFG.botVision, rc = Math.min(8, Math.ceil(M/CELL));
   const cx=ci(h.x), cy=ci(h.y);
   let best=null, bs=0;
   for (let gy=Math.max(0,cy-rc); gy<=Math.min(DIM-1,cy+rc); gy++)
@@ -384,13 +481,13 @@ function think(b){
   for (const o of snakes){
     if (o===b) continue;
     const oh=o.segs[0], d=Math.hypot(oh.x-h.x, oh.y-h.y);
-    if (b.aggr && d<500 && o.mass < b.mass*0.9){
+    if (b.aggrRoll < CFG.botAggr && d<500 && o.mass < b.mass*0.9){
       const lead = Math.min(d*0.6, 160);
       want = Math.atan2(oh.y+Math.sin(o.angle)*lead-h.y, oh.x+Math.cos(o.angle)*lead-h.x);
-      if (d<320 && b.mass>MIN_BOOST_MASS+14 && Math.random()<0.8) boost = true;
+      if (d<320 && b.mass>CFG.minBoost+14 && Math.random()<0.8) boost = true;
     } else if (d<260 && o.mass > b.mass*1.1){
       want = Math.atan2(h.y-oh.y, h.x-oh.x);
-      if (d<160 && b.mass>MIN_BOOST_MASS+6) boost = true;
+      if (d<160 && b.mass>CFG.minBoost+6) boost = true;
     }
   }
 
@@ -407,7 +504,7 @@ function think(b){
   }
   if (!found) boost = false;
   b.target = chosen; b.boost = boost;
-  b.thinkT = rnd(7,14);
+  b.thinkT = CFG.botReaction*rnd(0.7,1.4);
 }
 
 /* ============ Entrada ============ */
@@ -438,7 +535,11 @@ boostEl.addEventListener('pointerup', relBtn);
 boostEl.addEventListener('pointercancel', relBtn);
 
 window.addEventListener('keydown', e => {
-  if (e.target && e.target.id==='nick') { if (e.key==='Enter') startGame(); return; }
+  const tg = e.target && e.target.tagName;
+  if (tg==='INPUT' || tg==='SELECT' || tg==='TEXTAREA'){ if (e.target.id==='nick' && e.key==='Enter') startGame(); return; }
+  if (e.code==='F2'){ e.preventDefault(); adminUnlocked ? toggleAdmin() : openPw(); return; }
+  if (e.code==='Escape'){ if (!$('pw').classList.contains('hidden')) closePw(); else if (adminOpen) toggleAdmin(false); return; }
+  if (adminOpen) return;
   switch (e.code){
     case 'Space': case 'ShiftLeft': case 'ShiftRight': case 'ArrowUp': case 'KeyW': input.keyBoost = true; e.preventDefault(); break;
     case 'ArrowLeft': case 'KeyA': input.left = true; e.preventDefault(); break;
@@ -491,7 +592,7 @@ function startGame(){
   store.set('cobrinha.nick', nickEl.value.trim());
   if (player && player.alive) kill(player, null, true);
   const [x,y] = findSpawn();
-  player = makeSnake(name, SKINS[skinIdx], START_MASS, x, y, true);
+  player = makeSnake(name, SKINS[skinIdx], CFG.startMass, x, y, true);
   player.target = player.angle;
   input.angle = player.angle;
   cam.x = x; cam.y = y;
@@ -526,13 +627,17 @@ function step(k){
   for (const s of snakes) eatFood(s,k);
   updateFlying(k);
 
-  if (foodCount < FOOD_TARGET){
-    const n = Math.min(FOOD_TARGET-foodCount, Math.ceil(6*k));
+  if (foodCount < CFG.foodTarget){
+    const n = Math.min(CFG.foodTarget-foodCount, Math.ceil(6*k));
     for (let i=0;i<n;i++) spawnRegularFood();
   }
   while (respawns.length && respawns[0] <= worldT){ respawns.shift(); spawnBot(); }
   let botCount = 0; for (const s of snakes) if (!s.isPlayer) botCount++;
-  if (botCount + respawns.length < BOT_COUNT) spawnBot();
+  if (botCount + respawns.length < CFG.botCount) spawnBot();
+  else if (botCount + respawns.length > CFG.botCount){
+    if (respawns.length) respawns.pop();
+    else { const b = snakes.find(x => !x.isPlayer); if (b) removeSnake(b); }
+  }
 
   lbTimer -= k;
   if (lbTimer <= 0){ lbTimer = 24; leaderboard = snakes.slice().sort((a,b) => b.mass - a.mass); }
@@ -570,7 +675,7 @@ function drawSnake(s, vx0, vy0, vx1, vy1, z){
     ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(ex,ey,r*0.42,0,TAU); ctx.fill();
     ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(ex+ca*r*0.16,ey+sa*r*0.16,r*0.22,0,TAU); ctx.fill();
   }
-  if (!s.isPlayer){
+  if (!s.isPlayer && CFG.showNames){
     ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font=`600 ${Math.round(13/z)}px system-ui,sans-serif`;
     ctx.textAlign='center'; ctx.fillText(s.name, h.x, h.y - r - 8/z);
   }
@@ -586,7 +691,7 @@ function render(dt){
   if (focus){
     const h = focus.segs[0], f = 1 - Math.pow(0.0005, dt);
     cam.x += (h.x-cam.x)*Math.min(1,f*1.0+0.15); cam.y += (h.y-cam.y)*Math.min(1,f*1.0+0.15);
-    tz = baseZ/(1 + (focus.r-8)*0.04 + focus.segs.length*0.0003);
+    tz = (CFG.autoZoom ? baseZ/(1 + (focus.r-8)*0.04 + focus.segs.length*0.0003) : baseZ) * CFG.zoom;
     if (state==='menu') tz *= 0.9;
   } else tz = cam.z;
   cam.z += (tz-cam.z)*Math.min(1, dt*3);
@@ -599,7 +704,7 @@ function render(dt){
   ctx.save();
   ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,TAU); ctx.clip();
   ctx.fillStyle = '#0c1220'; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
-  ctx.fillStyle = bgPattern; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
+  if (CFG.showGrid){ ctx.fillStyle = bgPattern; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0); }
   ctx.restore();
 
   // comida
@@ -634,6 +739,7 @@ function render(dt){
     if (d < 350){ ctx.fillStyle = `rgba(255,30,60,${(1-d/350)*0.3})`; ctx.fillRect(0,0,W,H); }
   }
   if (state === 'play' || state === 'dead') drawHUD();
+  if (CFG.showFps) drawDebug();
   if (paused){
     ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(0,0,W,H);
     ctx.fillStyle='#fff'; ctx.font='700 32px system-ui,sans-serif'; ctx.textAlign='center';
@@ -660,6 +766,7 @@ function drawHUD(){
   }
 
   // ranking
+  if (CFG.showRanking){
   const rows = small ? 6 : 10, rw = small ? 150 : 200, rh = small ? 16 : 20;
   const rx = W - rw - m, ry = m;
   ctx.fillStyle = 'rgba(8,12,24,.55)';
@@ -680,8 +787,10 @@ function drawHUD(){
     ctx.textAlign='left'; ctx.fillText(`${leaderboard.indexOf(player)+1}. ${player.name.slice(0,12)}`, rx, y);
     ctx.textAlign='right'; ctx.fillText(score(player), rx+rw, y);
   }
+  }
 
   // minimapa
+  if (CFG.showMinimap){
   const mr = small ? 44 : 60, mx = m + mr, my = m + mr;
   ctx.fillStyle='rgba(8,12,24,.6)'; ctx.beginPath(); ctx.arc(mx,my,mr,0,TAU); ctx.fill();
   ctx.strokeStyle='rgba(255,51,85,.8)'; ctx.lineWidth=2; ctx.stroke();
@@ -695,6 +804,7 @@ function drawHUD(){
     const h = player.segs[0];
     ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(mx + h.x/ARENA_R*mr, my + h.y/ARENA_R*mr, 3, 0, TAU); ctx.fill();
   }
+  }
 
   // avisos
   ctx.textAlign='center';
@@ -705,25 +815,252 @@ function drawHUD(){
   });
   ctx.globalAlpha = 1;
 }
+function drawDebug(){
+  ctx.textAlign='left'; ctx.fillStyle='#9fffc0'; ctx.font='600 12px ui-monospace,Menlo,monospace';
+  ctx.shadowColor='rgba(0,0,0,.8)'; ctx.shadowBlur=4;
+  const y = Math.max(H*0.5-20, 150);
+  ctx.fillText(`${fps} FPS`, 12, y);
+  ctx.fillText(`cobras ${snakes.length} · comida ${foodCount}`, 12, y+16);
+  ctx.shadowBlur=0;
+}
 function roundRect(x,y,w,h,r){
   ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
   ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
 }
 
+
+/* ============ Painel admin ============ */
+function h53(str){
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i=0;i<str.length;i++){ const c = str.charCodeAt(i); h1 = Math.imul(h1^c, 2654435761); h2 = Math.imul(h2^c, 1597334677); }
+  h1 = Math.imul(h1^(h1>>>16), 2246822507) ^ Math.imul(h2^(h2>>>13), 3266489909);
+  h2 = Math.imul(h2^(h2>>>16), 2246822507) ^ Math.imul(h1^(h1>>>13), 3266489909);
+  return (4294967296*(2097151&h2) + (h1>>>0)).toString(36);
+}
+let adminUnlocked = false, adminOpen = false, pwFails = 0, pwLockUntil = 0;
+try { adminUnlocked = sessionStorage.getItem('cobrinha.adm') === '1'; } catch(e){}
+const adminEl = $('admin'), gearEl = $('gear'), pwEl = $('pw'), pwIn = $('pwIn'), pwErr = $('pwErr');
+const controls = {};
+
+function openPw(){
+  pwIn.value = ''; pwErr.textContent = ''; pwEl.classList.remove('hidden');
+  setTimeout(() => pwIn.focus(), 50);
+}
+function closePw(){ pwEl.classList.add('hidden'); pwIn.blur(); }
+function tryPw(){
+  const now = Date.now();
+  if (now < pwLockUntil){ pwErr.textContent = `Aguarde ${Math.ceil((pwLockUntil-now)/1000)}s…`; return; }
+  if (h53('cobrinha:' + pwIn.value) === ADMIN_HASH){
+    pwFails = 0; adminUnlocked = true;
+    try { sessionStorage.setItem('cobrinha.adm','1'); } catch(e){}
+    gearEl.classList.add('on'); closePw(); toggleAdmin(true);
+  } else {
+    pwFails++; pwLockUntil = now + Math.min(30000, pwFails*1500);
+    pwErr.textContent = 'Senha incorreta.'; pwIn.select();
+  }
+}
+$('pwOk').addEventListener('click', tryPw);
+$('pwCancel').addEventListener('click', closePw);
+pwIn.addEventListener('keydown', e => { if (e.key==='Enter') tryPw(); });
+pwEl.addEventListener('pointerdown', e => { if (e.target===pwEl) closePw(); });
+
+// atalho escondido: 5 toques rápidos no título do menu
+let tapN = 0, tapT = 0;
+document.querySelector('#menu h1').addEventListener('click', () => {
+  const n = performance.now();
+  tapN = (n - tapT < 2500) ? tapN + 1 : 1; tapT = n;
+  if (tapN >= 5){ tapN = 0; adminUnlocked ? toggleAdmin(true) : openPw(); }
+});
+
+function toggleAdmin(v){
+  adminOpen = v===undefined ? !adminOpen : v;
+  adminEl.classList.toggle('open', adminOpen);
+  if (adminOpen) refreshStats();
+}
+gearEl.addEventListener('click', () => toggleAdmin());
+$('admClose').addEventListener('click', () => toggleAdmin(false));
+$('admLock').addEventListener('click', () => {
+  adminUnlocked = false; try { sessionStorage.removeItem('cobrinha.adm'); } catch(e){}
+  gearEl.classList.remove('on'); toggleAdmin(false);
+});
+if (adminUnlocked) gearEl.classList.add('on');
+
+function msg(t){ $('adminMsg').textContent = t; clearTimeout(msg.t); msg.t = setTimeout(() => $('adminMsg').textContent = '', 3000); }
+function refreshStats(){
+  if (!adminOpen) return;
+  const bots = snakes.filter(x => !x.isPlayer).length;
+  $('adminStats').textContent = `${fps} FPS · bots ${bots} · comida ${foodCount} · ` +
+    (player && player.alive ? `massa ${player.mass.toFixed(1)} (${score(player)} pts)` : 'sem jogador');
+}
+setInterval(refreshStats, 500);
+
+/* --- ações do mundo --- */
+function removeSnake(s){ s.alive = false; const i = snakes.indexOf(s); if (i>=0) snakes.splice(i,1); }
+function trimFood(){
+  let extra = foodCount - CFG.foodTarget;
+  for (let i=0;i<foodGrid.length && extra>0;i++){ const a = foodGrid[i]; const n = Math.min(extra, a.length); a.length -= n; foodCount -= n; extra -= n; }
+}
+function resetWorld(){
+  ARENA_R = CFG.arenaR;
+  for (const a of foodGrid) a.length = 0;
+  foodCount = 0; flying.length = 0; respawns.length = 0;
+  for (let i=snakes.length-1;i>=0;i--) if (!snakes[i].isPlayer) snakes.splice(i,1);
+  if (player && player.alive) teleportPlayer(0.4);
+  for (let i=0;i<CFG.foodTarget;i++) spawnRegularFood();
+  buildSegGrid();
+  for (let i=0;i<CFG.botCount;i++){ spawnBot(); buildSegGrid(); }
+  leaderboard = snakes.slice().sort((a,b) => b.mass - a.mass);
+}
+function teleportPlayer(frac){
+  if (!player || !player.alive) return;
+  const a = rnd(0,TAU), d = Math.sqrt(Math.random())*ARENA_R*frac, h = player.segs[0];
+  const dx = Math.cos(a)*d - h.x, dy = Math.sin(a)*d - h.y;
+  for (const p of player.segs){ p.x += dx; p.y += dy; }
+  cam.x += dx; cam.y += dy;
+}
+const needPlayer = fn => () => { if (player && player.alive) fn(); else msg('Entre na partida primeiro.'); };
+const ACTIONS = [
+  ['+1.000 pts',     needPlayer(() => { player.mass += 100; msg('+1.000 pts'); })],
+  ['+10.000 pts',    needPlayer(() => { player.mass += 1000; msg('+10.000 pts'); })],
+  ['Encolher ½',     needPlayer(() => { player.mass = Math.max(5, player.mass/2); msg('Massa pela metade'); })],
+  ['Teleportar',     needPlayer(() => { teleportPlayer(0.85); msg('Teleportado'); })],
+  ['Chuva de comida', needPlayer(() => {
+    const h = player.segs[0];
+    for (let i=0;i<400;i++){ const a = rnd(0,TAU), d = rnd(40,700), x = h.x+Math.cos(a)*d, y = h.y+Math.sin(a)*d;
+      if (x*x+y*y < (ARENA_R-30)*(ARENA_R-30)) addFood(x, y, rnd(0.6,1.6)*CFG.foodValue, `hsl(${FOOD_HUES[(Math.random()*FOOD_HUES.length)|0]},100%,62%)`); }
+    msg('400 orbes criados');
+  })],
+  ['Regenerar comida', () => { for (const a of foodGrid) a.length = 0; foodCount = 0; flying.length = 0;
+    for (let i=0;i<CFG.foodTarget;i++) spawnRegularFood(); msg('Comida regenerada'); }],
+  ['+5 bots',        () => { setCfg('botCount', Math.min(80, CFG.botCount+5)); msg(`Bots: ${CFG.botCount}`); }],
+  ['−5 bots',        () => { setCfg('botCount', Math.max(0, CFG.botCount-5)); msg(`Bots: ${CFG.botCount}`); }],
+  ['Bot gigante',    () => {
+    setCfg('botCount', Math.min(80, CFG.botCount+1));
+    const [x,y] = findSpawn(); const b = makeSnake('GIGANTE', SKINS[(Math.random()*SKINS.length)|0], 2500, x, y, false);
+    b.aggrRoll = 0; msg('Bot gigante criado');
+  }],
+  ['Matar todos os bots', () => { for (const b of snakes.filter(x => !x.isPlayer)) kill(b, null, false); msg('Bots eliminados'); }],
+  ['Reiniciar mundo', () => { resetWorld(); msg('Mundo reiniciado'); }],
+  ['Restaurar padrões', () => { for (const k in DEFAULTS) setCfg(k, DEFAULTS[k], true); resetWorld(); saveCfg(); msg('Padrões restaurados'); }],
+];
+
+/* --- esquema dos controles --- */
+const SCHEMA = [
+  { g:'🐍 Jogador', open:true, items:[
+    { k:'speed',      l:'Velocidade base',        min:0.5, max:10, step:0.1 },
+    { k:'boostSpeed', l:'Velocidade do boost',    min:0.5, max:20, step:0.1 },
+    { k:'turnRate',   l:'Agilidade de curva',     min:0.02, max:0.6, step:0.01 },
+    { k:'boostCost',  l:'Custo do boost (massa/tick)', min:0, max:0.6, step:0.005 },
+    { k:'infBoost',   l:'Boost infinito', t:'bool' },
+    { k:'minBoost',   l:'Massa mínima p/ boost',  min:0, max:200, step:1 },
+    { k:'startMass',  l:'Massa inicial',          min:5, max:5000, step:5 },
+    { k:'bodyScale',  l:'Espessura do corpo',     min:0.4, max:3, step:0.05 },
+    { k:'segPerMass', l:'Comprimento por massa',  min:0.1, max:3, step:0.05 },
+    { k:'magnet',     l:'Alcance de coleta (ímã)', min:0.3, max:8, step:0.1 },
+    { k:'god',        l:'Modo deus (invencível)', t:'bool' },
+    { k:'selfCollide',l:'Morrer ao bater em si mesmo', t:'bool' },
+  ]},
+  { g:'🤖 Bots', items:[
+    { k:'botCount',   l:'Quantidade de bots',     min:0, max:80, step:1 },
+    { k:'botSpeed',   l:'Velocidade dos bots (×)', min:0.2, max:3, step:0.05 },
+    { k:'botAggr',    l:'Agressividade (% caçadores)', min:0, max:1, step:0.05 },
+    { k:'botTurn',    l:'Agilidade dos bots (×)', min:0.2, max:3, step:0.05 },
+    { k:'botReaction',l:'Tempo de reação (ticks)', min:2, max:90, step:1, hint:'Menor = bots mais espertos' },
+    { k:'botVision',  l:'Visão para comida (px)', min:100, max:960, step:20 },
+    { k:'botMassMin', l:'Massa inicial mín.',     min:5, max:1000, step:5 },
+    { k:'botMassMax', l:'Massa inicial máx.',     min:5, max:2000, step:5 },
+    { k:'botBig',     l:'Chance de bot veterano', min:0, max:1, step:0.05, hint:'Nasce com 1× a 4× a massa máxima' },
+    { k:'botRespawn', l:'Tempo p/ reaparecer (s)', min:0, max:30, step:0.5 },
+  ]},
+  { g:'🌍 Mundo', items:[
+    { k:'arenaR',     l:'Raio da arena',          min:800, max:3500, step:100, reset:true, hint:'Reinicia o mundo ao soltar' },
+    { k:'foodTarget', l:'Quantidade de comida',   min:0, max:6000, step:100 },
+    { k:'foodValue',  l:'Valor da comida (×)',    min:0.2, max:8, step:0.1 },
+    { k:'deathDrop',  l:'Comida ao morrer (× massa)', min:0, max:2, step:0.05 },
+    { k:'wallKills',  l:'Borda da arena mata', t:'bool' },
+    { k:'wallDrops',  l:'Morte na borda deixa orbes', t:'bool' },
+    { k:'timeScale',  l:'Velocidade do jogo (×)', min:0.1, max:3, step:0.05 },
+  ]},
+  { g:'🎥 Câmera e interface', items:[
+    { k:'zoom',       l:'Zoom (×)',               min:0.3, max:2.5, step:0.05 },
+    { k:'autoZoom',   l:'Zoom automático ao crescer', t:'bool' },
+    { k:'showNames',  l:'Nomes das cobras', t:'bool' },
+    { k:'showMinimap',l:'Minimapa', t:'bool' },
+    { k:'showRanking',l:'Ranking', t:'bool' },
+    { k:'showGrid',   l:'Textura do fundo', t:'bool' },
+    { k:'showFps',    l:'Mostrar FPS / contadores', t:'bool' },
+    { k:'pauseOnPanel', l:'Pausar jogo com painel aberto', t:'bool' },
+  ]},
+];
+const decimals = st => (String(st).split('.')[1] || '').length;
+
+function setCfg(k, v, skipSave){
+  CFG[k] = v;
+  const c = controls[k];
+  if (c){ if (c.cb) c.cb.checked = !!v; else { c.rng.value = v; c.num.value = +(+v).toFixed(c.dec); } }
+  if (!skipSave) saveCfg();
+}
+function buildAdmin(){
+  const body = $('adminBody');
+  const acts = document.createElement('div'); acts.className = 'acts';
+  for (const [name, fn] of ACTIONS){
+    const b = document.createElement('button'); b.className = 'btn' + (/Matar|Restaurar|Reiniciar/.test(name) ? ' warn' : '');
+    b.textContent = name; b.addEventListener('click', fn); acts.appendChild(b);
+  }
+  body.appendChild(acts);
+  for (const grp of SCHEMA){
+    const d = document.createElement('details'); if (grp.open) d.open = true;
+    const sm = document.createElement('summary'); sm.textContent = grp.g; d.appendChild(sm);
+    const g = document.createElement('div'); g.className = 'grp'; d.appendChild(g);
+    for (const it of grp.items){
+      const row = document.createElement('div'); row.className = 'row' + (it.t==='bool' ? ' bool' : '');
+      const lab = document.createElement('label'); lab.textContent = it.l; row.appendChild(lab);
+      if (it.t === 'bool'){
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'sw'; cb.checked = !!CFG[it.k];
+        cb.addEventListener('change', () => setCfg(it.k, cb.checked));
+        row.appendChild(cb); controls[it.k] = { cb };
+      } else {
+        if (it.hint){ const h = document.createElement('div'); h.className = 'hint'; h.textContent = it.hint; row.appendChild(h); }
+        const dec = decimals(it.step), ctl = document.createElement('div'); ctl.className = 'ctl';
+        const rng = document.createElement('input'); rng.type = 'range'; rng.min = it.min; rng.max = it.max; rng.step = it.step; rng.value = CFG[it.k];
+        const num = document.createElement('input'); num.type = 'number'; num.min = it.min; num.max = it.max; num.step = it.step; num.value = +CFG[it.k].toFixed(dec);
+        num.inputMode = 'decimal';
+        const commit = ev => {
+          if (ev==='change' && it.reset) { resetWorld(); }
+          if (ev==='change' && it.k==='foodTarget') trimFood();
+        };
+        rng.addEventListener('input', () => setCfg(it.k, +rng.value) || (num.value = +(+rng.value).toFixed(dec)));
+        rng.addEventListener('change', () => commit('change'));
+        num.addEventListener('change', () => {
+          let v = parseFloat(num.value); if (!isFinite(v)) v = DEFAULTS[it.k];
+          v = clamp(v, it.min, it.max); setCfg(it.k, v); commit('change');
+        });
+        ctl.append(rng, num); row.appendChild(ctl); controls[it.k] = { rng, num, dec };
+      }
+      g.appendChild(row);
+    }
+    body.appendChild(d);
+  }
+}
+buildAdmin();
+
 /* ============ Início ============ */
-for (let i=0;i<BOT_COUNT;i++) spawnBot();
+for (let i=0;i<CFG.botCount;i++){ spawnBot(); buildSegGrid(); }
 buildSegGrid();
 leaderboard = snakes.slice().sort((a,b) => b.mass - a.mass);
 if (leaderboard[0]){ cam.x = leaderboard[0].segs[0].x; cam.y = leaderboard[0].segs[0].y; }
 
 let last = performance.now();
+let fps = 0, fpsFrames = 0, fpsAcc = 0;
 function frame(now){
   requestAnimationFrame(frame);
   let dt = (now-last)/1000; last = now;
   if (!(dt>0)) dt = 0.016;
   if (dt > 0.1) dt = 0.1;
-  if (!paused){
-    let rem = dt*60;
+  fpsFrames++; fpsAcc += dt;
+  if (fpsAcc >= 0.5){ fps = Math.round(fpsFrames/fpsAcc); fpsFrames = 0; fpsAcc = 0; }
+  if (!paused && !(adminOpen && CFG.pauseOnPanel)){
+    let rem = dt*60*CFG.timeScale;
     while (rem > 0.0001){ const k = Math.min(rem,1); step(k); rem -= k; }
   }
   render(dt);
