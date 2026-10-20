@@ -1,0 +1,457 @@
+"""
+9Router bridge — Gemini listens, 9Router thinks.
+
+HOW THE PIECES FIT
+    Gemini Live stays exactly where it was: it holds the microphone, the voice,
+    the avatar, the tools. What changes is WHO WRITES THE ANSWER. With the
+    bridge on, every user turn is relayed through the `ask_9router` tool
+    (actions/ninerouter_relay.py): Gemini hands over a raw-refined version of
+    what it heard plus anything it can see — the screen, the camera, a dropped
+    image, frames from a video — and 9Router answers. Gemini then only speaks
+    that answer.
+
+    9Router (https://github.com/decolua/9router) is a local gateway that serves
+    the OpenAI protocol at http://localhost:20128/v1 and routes to whatever
+    providers you configured in its dashboard. So this file is a plain
+    /v1/chat/completions client, with `httpx` (already installed by google-genai).
+
+WHERE THE SETTINGS LIVE
+    config/api_keys.json -> "ninerouter": {...}, the same file every other
+    setting uses. Environment variables (or a .env file next to main.py) win
+    over the file, so a key never has to be written to disk if you prefer:
+        NINEROUTER_BASE_URL, NINEROUTER_API_KEY, NINEROUTER_MODEL,
+        NINEROUTER_ENABLED (1/0)
+
+THE DEV CONSOLE
+    Every request, answer and error is published to listeners (the UI's dev
+    console subscribes), so you can watch the traffic like a network tab.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+import sys
+import threading
+import time
+from collections import deque
+from pathlib import Path
+from typing import Callable, Optional
+
+
+def _base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
+
+
+BASE_DIR    = _base_dir()
+CONFIG_FILE = BASE_DIR / "config" / "api_keys.json"
+ENV_FILE    = BASE_DIR / ".env"
+
+DEFAULTS: dict = {
+    "enabled":       False,
+    # 127.0.0.1 rather than localhost: on Windows `localhost` resolves to ::1
+    # first and a server bound to IPv4 only refuses it (same reason as
+    # providers/llm_openai.py).
+    "base_url":      "http://127.0.0.1:20128/v1",
+    "api_key":       "",
+    "model":         "",
+    "temperature":   0.4,
+    "timeout":       90,
+    "max_tokens":    1024,
+    "history_turns": 6,       # previous exchanges sent back for context
+    "system_prompt": "",      # extra instructions appended to the built-in one
+}
+
+_SYSTEM_PROMPT = (
+    "You are the reasoning core of a desktop voice assistant called {name}. "
+    "Another model transcribes the user's speech and sends you a refined "
+    "version of the request, the raw transcript, and sometimes images "
+    "(screen captures show the user's COMPUTER, webcam frames show the USER). "
+    "Your answer will be SPOKEN ALOUD by a text-to-speech voice, so: answer in "
+    "the same language the user spoke; be precise and direct; no markdown, no "
+    "tables, no emojis, no code fences unless the user explicitly asked for "
+    "code; prefer short paragraphs. If the transcript looks garbled, answer "
+    "the most likely intent and say briefly what you assumed. Never invent "
+    "facts: when you do not know, say so."
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Config
+# ─────────────────────────────────────────────────────────────────────────────
+def _read_env_file() -> dict:
+    out = {}
+    try:
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return out
+
+
+def _env(name: str, file_env: dict) -> Optional[str]:
+    v = os.environ.get(name)
+    if v is None:
+        v = file_env.get(name)
+    return v if v not in (None, "") else None
+
+
+_cache: dict = {"mtime": None, "cfg": None}
+
+
+def load_config() -> dict:
+    """Saved settings merged over DEFAULTS, then env vars over both.
+
+    Cached against the file's mtime so it is cheap to call on every request and
+    a change saved from the panel takes effect without a restart."""
+    try:
+        mtime = CONFIG_FILE.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _cache["cfg"] is None or _cache["mtime"] != mtime:
+        saved = {}
+        try:
+            saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("ninerouter") or {}
+        except Exception:
+            saved = {}
+        _cache["cfg"] = {**DEFAULTS, **saved}
+        _cache["mtime"] = mtime
+
+    cfg = dict(_cache["cfg"])
+    fe = _read_env_file()
+    for key, var in (("base_url", "NINEROUTER_BASE_URL"),
+                     ("api_key",  "NINEROUTER_API_KEY"),
+                     ("model",    "NINEROUTER_MODEL")):
+        v = _env(var, fe)
+        if v:
+            cfg[key] = v
+    en = _env("NINEROUTER_ENABLED", fe)
+    if en is not None:
+        cfg["enabled"] = en.strip().lower() in ("1", "true", "yes", "on", "sim")
+    return cfg
+
+
+def save_config(values: dict) -> None:
+    """Read-modify-write only the "ninerouter" block of api_keys.json."""
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    block = {**DEFAULTS, **(data.get("ninerouter") or {})}
+    for k, v in values.items():
+        if k in DEFAULTS:
+            block[k] = v
+    data["ninerouter"] = block
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    _cache["cfg"] = None
+
+
+def enabled() -> bool:
+    return bool(load_config().get("enabled"))
+
+
+def normalise_url(url: str) -> str:
+    """localhost -> 127.0.0.1, add a missing scheme, add /v1 when there is no path."""
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return DEFAULTS["base_url"]
+    if "://" not in url:
+        url = "http://" + url
+    scheme, _, rest = url.partition("://")
+    host, slash, path = rest.partition("/")
+    if host.split(":")[0].lower() == "localhost":
+        port = host.partition(":")[2]
+        host = "127.0.0.1" + (f":{port}" if port else "")
+    url = f"{scheme}://{host}{slash}{path}".rstrip("/")
+    if not path:
+        url += "/v1"
+    return url
+
+
+def _root_url(base_url: str) -> str:
+    """http://127.0.0.1:20128/v1 -> http://127.0.0.1:20128"""
+    u = normalise_url(base_url)
+    return u[:-3] if u.endswith("/v1") else u
+
+
+def _headers(cfg: dict) -> dict:
+    h = {"Content-Type": "application/json"}
+    key = str(cfg.get("api_key") or "").strip()
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Events for the dev console
+# ─────────────────────────────────────────────────────────────────────────────
+_listeners: list[Callable[[dict], None]] = []
+_lock = threading.Lock()
+
+stats = {
+    "requests": 0,
+    "errors": 0,
+    "last_latency_ms": None,
+    "last_model": "",
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "online": None,     # None = unknown, True/False after a ping
+}
+
+
+def add_listener(fn: Callable[[dict], None]) -> None:
+    if fn not in _listeners:
+        _listeners.append(fn)
+
+
+def _emit(kind: str, **data) -> None:
+    evt = {"kind": kind, "ts": time.strftime("%H:%M:%S"), **data}
+    for fn in list(_listeners):
+        try:
+            fn(evt)
+        except Exception:
+            pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  What Gemini heard
+# ─────────────────────────────────────────────────────────────────────────────
+_heard = {"text": "", "at": 0.0}
+
+
+def note_heard(text: str) -> None:
+    """Called by main.py with the raw input transcription as it streams in."""
+    _heard["text"] = (text or "").strip()
+    _heard["at"] = time.monotonic()
+
+
+def last_heard(max_age: float = 90.0, consume: bool = False) -> str:
+    """The latest raw transcript, if recent. consume=True hands it out once, so
+    a later turn (typed, or a follow-up tool call) never reuses stale words."""
+    text = "" if time.monotonic() - _heard["at"] > max_age else _heard["text"]
+    if consume:
+        _heard["text"] = ""
+    return text
+
+
+_REPEAT = re.compile(r"\b(\w+)(\s+\1\b)+", re.IGNORECASE | re.UNICODE)
+
+
+def refine(text: str) -> str:
+    """The "raw" refinement: whitespace collapsed, stutters ("o o o que") folded,
+    stray transcription noise removed. Deliberately NOT a rewrite — meaning is
+    left untouched, and no language-specific word list is used."""
+    t = (text or "").replace("​", " ")
+    t = re.sub(r"<[^>]{1,20}>", " ", t)           # <noise>, <unk> tags
+    t = re.sub(r"\s+", " ", t).strip()
+    t = _REPEAT.sub(r"\1", t)
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)
+    return t
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  The request
+# ─────────────────────────────────────────────────────────────────────────────
+_history: deque = deque(maxlen=40)    # (user_text, answer) — text only
+
+
+def clear_history() -> None:
+    _history.clear()
+    _emit("info", text="history cleared")
+
+
+def _assistant_name() -> str:
+    try:
+        return (json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                .get("assistant_name") or "JARVIS").strip()
+    except Exception:
+        return "JARVIS"
+
+
+def _build_messages(cfg: dict, request: str, raw: str,
+                    images: list, extra_text: str) -> list:
+    sys_txt = _SYSTEM_PROMPT.format(name=_assistant_name())
+    sys_txt += f"\nCurrent local time: {time.strftime('%A %Y-%m-%d %H:%M')}."
+    if str(cfg.get("system_prompt") or "").strip():
+        sys_txt += "\n\n" + str(cfg["system_prompt"]).strip()
+    msgs: list = [{"role": "system", "content": sys_txt}]
+
+    n = int(cfg.get("history_turns") or 0)
+    if n > 0:
+        for u, a in list(_history)[-n:]:
+            msgs.append({"role": "user", "content": u})
+            msgs.append({"role": "assistant", "content": a})
+
+    body = f"[REQUEST]\n{request.strip()}"
+    if raw and refine(raw).lower() != request.strip().lower():
+        body += f"\n\n[RAW TRANSCRIPT — what the microphone heard]\n{refine(raw)}"
+    if extra_text:
+        body += f"\n\n[ATTACHED CONTENT]\n{extra_text}"
+
+    if images:
+        content: list = [{"type": "text", "text": body}]
+        for img_bytes, mime, label in images:
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            if label:
+                content.append({"type": "text", "text": f"[{label}]"})
+            content.append({"type": "image_url",
+                             "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        msgs.append({"role": "user", "content": content})
+    else:
+        msgs.append({"role": "user", "content": body})
+    return msgs
+
+
+def _strip_think(text: str) -> str:
+    """Reasoning models' <think> blocks must never be spoken."""
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S | re.I)
+    text = re.sub(r"^.*?</think>", "", text, flags=re.S | re.I)
+    return text.strip()
+
+
+def ask(request: str, raw_heard: str = "", images: Optional[list] = None,
+        extra_text: str = "") -> str:
+    """Send one turn to 9Router and return the answer text. Raises on failure.
+
+    images: list of (bytes, mime, label).
+    """
+    import httpx
+
+    cfg = load_config()
+    base = normalise_url(cfg.get("base_url", ""))
+    model = str(cfg.get("model") or "").strip()
+    if not model:
+        raise RuntimeError("no 9Router model configured (⚙ → 9ROUTER → model)")
+
+    images = images or []
+    msgs = _build_messages(cfg, request, raw_heard, images, extra_text)
+    payload = {
+        "model": model,
+        "messages": msgs,
+        "temperature": float(cfg.get("temperature") or 0.4),
+        "stream": False,
+    }
+    mt = int(cfg.get("max_tokens") or 0)
+    if mt > 0:
+        payload["max_tokens"] = mt
+
+    with _lock:
+        stats["requests"] += 1
+        rid = stats["requests"]
+    _emit("request", id=rid, model=model, url=f"{base}/chat/completions",
+          text=request, raw=raw_heard, images=len(images),
+          attached=len(extra_text))
+
+    t0 = time.monotonic()
+    try:
+        r = httpx.post(f"{base}/chat/completions", json=payload,
+                       headers=_headers(cfg),
+                       timeout=float(cfg.get("timeout") or 90))
+        if r.status_code >= 400:
+            detail = r.text[:400]
+            if r.status_code in (401, 403):
+                raise RuntimeError(f"9Router refused the API key (HTTP {r.status_code})")
+            if r.status_code == 404:
+                raise RuntimeError(f"HTTP 404 — wrong address or unknown model "
+                                   f"'{model}': {detail}")
+            raise RuntimeError(f"HTTP {r.status_code}: {detail}")
+        data = r.json()
+        msg = (data.get("choices") or [{}])[0].get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):     # some gateways return parts
+            content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        answer = _strip_think(content or "")
+        if not answer:
+            raise RuntimeError("9Router returned an empty answer")
+    except Exception as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        with _lock:
+            stats["errors"] += 1
+            stats["last_latency_ms"] = ms
+            if "ConnectError" in type(e).__name__ or "Connect" in str(type(e)):
+                stats["online"] = False
+        _emit("error", id=rid, ms=ms, text=f"{type(e).__name__}: {e}")
+        if type(e).__name__ in ("ConnectError", "ConnectTimeout"):
+            raise RuntimeError(f"nothing answered at {base} — is 9Router running?") from e
+        raise
+
+    ms = int((time.monotonic() - t0) * 1000)
+    usage = data.get("usage") or {}
+    with _lock:
+        stats["last_latency_ms"] = ms
+        stats["last_model"] = data.get("model") or model
+        stats["tokens_in"] += int(usage.get("prompt_tokens") or 0)
+        stats["tokens_out"] += int(usage.get("completion_tokens") or 0)
+        stats["online"] = True
+    _history.append((request.strip(), answer))
+    _emit("response", id=rid, ms=ms, model=stats["last_model"], text=answer,
+          usage=usage)
+    return answer
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Diagnostics for the settings panel
+# ─────────────────────────────────────────────────────────────────────────────
+def list_models(cfg: Optional[dict] = None) -> list[str]:
+    import httpx
+    cfg = cfg or load_config()
+    base = normalise_url(cfg.get("base_url", ""))
+    r = httpx.get(f"{base}/models", headers=_headers(cfg), timeout=10)
+    r.raise_for_status()
+    items = r.json().get("data") or []
+    return sorted({str(m.get("id")) for m in items if m.get("id")})
+
+
+def ping(cfg: Optional[dict] = None) -> bool:
+    """Cheap liveness check for the status bar. Never raises."""
+    import httpx
+    cfg = cfg or load_config()
+    root = _root_url(cfg.get("base_url", ""))
+    ok = False
+    for url in (f"{root}/api/health", f"{normalise_url(cfg.get('base_url', ''))}/models"):
+        try:
+            r = httpx.get(url, headers=_headers(cfg), timeout=3)
+            if r.status_code < 500:
+                ok = True
+                break
+        except Exception:
+            continue
+    stats["online"] = ok
+    return ok
+
+
+def test(cfg: Optional[dict] = None) -> tuple[bool, str]:
+    """One sentence a person can act on."""
+    import httpx
+    cfg = {**load_config(), **(cfg or {})}
+    base = normalise_url(cfg.get("base_url", ""))
+    t0 = time.monotonic()
+    try:
+        models = list_models(cfg)
+    except httpx.ConnectError:
+        return False, f"Nada respondeu em {base} — o 9Router está rodando? (npx 9router)"
+    except httpx.HTTPStatusError as e:
+        code = e.response.status_code
+        if code in (401, 403):
+            return False, "O 9Router recusou a API key — confira em Dashboard → API Keys."
+        return False, f"HTTP {code} em {base}/models"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    ms = int((time.monotonic() - t0) * 1000)
+    model = str(cfg.get("model") or "").strip()
+    if not model:
+        return True, f"Conectado em {ms} ms — {len(models)} modelo(s). Escolha um modelo."
+    if models and model not in models:
+        return False, (f"Conectado, mas o modelo '{model}' não existe aí. "
+                       f"Use LISTAR para ver os {len(models)} disponíveis.")
+    return True, f"Conectado em {ms} ms · modelo '{model}' OK · {len(models)} disponíveis."
