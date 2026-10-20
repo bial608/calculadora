@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Cobrinha Arena</title>
+<style>
+  :root { --bg:#0b0f1a; --card:#141b2d; --line:#26324d; --txt:#eaf0ff; --mut:#8fa0c4; --acc:#39ff88; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--txt);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; overscroll-behavior:none; }
+  canvas { position:fixed; inset:0; display:block; }
+
+  #menu { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:16px;
+    background:rgba(5,8,16,.7); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); overflow:auto; touch-action:pan-y; }
+  #menu.hidden { display:none; }
+  .card { width:min(440px,100%); background:var(--card); border:1px solid var(--line); border-radius:20px;
+    padding:22px 20px; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,.5); margin:auto; }
+  h1 { margin:0 0 4px; font-size:clamp(28px,8vw,40px); letter-spacing:-.02em;
+    background:linear-gradient(90deg,#39ff88,#2fa8ff,#b05cff); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub { margin:0 0 16px; color:var(--mut); font-size:14px; }
+  input#nick { width:100%; padding:13px 14px; font-size:17px; border-radius:12px; border:1px solid var(--line);
+    background:#0d1424; color:var(--txt); outline:none; text-align:center; user-select:text; -webkit-user-select:text; }
+  input#nick:focus { border-color:var(--acc); }
+  .lbl { margin:14px 0 8px; font-size:12px; color:var(--mut); text-transform:uppercase; letter-spacing:.08em; }
+  #skins { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+  .sk { aspect-ratio:1; border-radius:12px; border:2px solid transparent; cursor:pointer; position:relative; overflow:hidden; padding:0; }
+  .sk.sel { border-color:#fff; box-shadow:0 0 0 2px var(--acc); }
+  button#play { margin-top:18px; width:100%; padding:15px; font-size:19px; font-weight:700; border:0; border-radius:14px; cursor:pointer;
+    color:#04210f; background:linear-gradient(90deg,#39ff88,#8dffb8); }
+  button#play:active { transform:scale(.98); }
+  #result { display:none; margin-bottom:14px; padding:12px; border-radius:14px; background:#0d1424; border:1px solid var(--line); }
+  #result h2 { margin:0 0 8px; font-size:20px; color:#ff6b81; }
+  #result .row { display:flex; justify-content:space-around; gap:8px; }
+  #result b { display:block; font-size:22px; color:var(--txt); }
+  #result span { font-size:12px; color:var(--mut); }
+  #result p { margin:8px 0 0; font-size:13px; color:var(--mut); }
+  .help { margin-top:14px; font-size:12.5px; color:var(--mut); line-height:1.55; text-align:left; }
+  .help kbd { background:#0d1424; border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:11.5px; color:var(--txt); }
+  body.touch .desk { display:none; } body:not(.touch) .tch { display:none; }
+
+  #boost { position:fixed; right:calc(18px + env(safe-area-inset-right)); bottom:calc(22px + env(safe-area-inset-bottom));
+    width:92px; height:92px; border-radius:50%; border:3px solid rgba(255,255,255,.5); display:none; align-items:center; justify-content:center;
+    font-size:38px; color:#fff; background:rgba(255,200,40,.28); backdrop-filter:blur(2px); touch-action:none; }
+  #boost.on { background:rgba(255,200,40,.7); transform:scale(.94); }
+  body.touch.playing #boost { display:flex; }
+  #pbtn { position:fixed; left:50%; bottom:calc(10px + env(safe-area-inset-bottom)); transform:translateX(-50%); display:none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="boost">⚡</div>
+
+<div id="menu">
+  <div class="card">
+    <h1>Cobrinha Arena</h1>
+    <p class="sub">Coma, cresça e faça os outros baterem em você.</p>
+    <div id="result">
+      <h2 id="resTitle">Você morreu!</h2>
+      <div class="row">
+        <div><b id="resScore">0</b><span>pontos</span></div>
+        <div><b id="resKills">0</b><span>abates</span></div>
+        <div><b id="resBest">0</b><span>recorde</span></div>
+      </div>
+      <p id="resKiller"></p>
+    </div>
+    <input id="nick" maxlength="14" placeholder="Seu apelido" autocomplete="off" spellcheck="false">
+    <div class="lbl">Escolha sua skin</div>
+    <div id="skins"></div>
+    <button id="play">Jogar</button>
+    <div class="help">
+      <div class="desk"><kbd>Mouse</kbd> direciona a cobra · <kbd>Clique</kbd> / <kbd>Espaço</kbd> acelera · <kbd>←</kbd> <kbd>→</kbd> / <kbd>A</kbd> <kbd>D</kbd> também giram · <kbd>P</kbd> pausa</div>
+      <div class="tch">Toque e arraste na tela para direcionar · segure o botão ⚡ para acelerar.</div>
+      <div style="margin-top:6px">Acelerar gasta massa e deixa comida para trás. Bater a <b>cabeça</b> no corpo de outra cobra ou na borda da arena te elimina; quem bate no seu corpo é que morre.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ============ Configuração ============ */
+const TAU = Math.PI * 2;
+const ARENA_R = 3000;             // raio da arena
+const CELL = 120, DIM = 64, OFF = 32;   // grade espacial
+const COARSE = matchMedia('(pointer:coarse)').matches;
+const BOT_COUNT = COARSE ? 16 : 26;
+const FOOD_TARGET = COARSE ? 1800 : 2600;
+const BASE_SPEED = 2.7, BOOST_SPEED = 5.4;   // px por tick (1 tick = 1/60 s)
+const BOOST_COST = 0.05, MIN_BOOST_MASS = 10, START_MASS = 15;
+const WALL_DROPS_FOOD = false;    // pesquisa indica que morrer na parede não deixa orbes
+
+const SKINS = [
+  { n:'Neon',      c:['#39ff88','#12c764'] },
+  { n:'Fogo',      c:['#ff5a36','#ffb02e'] },
+  { n:'Oceano',    c:['#2fa8ff','#1b5cff'] },
+  { n:'Uva',       c:['#b05cff','#7a2cff'] },
+  { n:'Rosa',      c:['#ff4fa3','#ff9bcb'] },
+  { n:'Limão',     c:['#e6ff3a','#9be000'] },
+  { n:'Gelo',      c:['#c8f6ff','#6fd0ff'] },
+  { n:'Brasil',    c:['#1fcf4d','#ffd400','#1b4dff'] },
+  { n:'Zebra',     c:['#ffffff','#2a2a33'] },
+  { n:'Arco-íris', c:['#ff3b3b','#ff9f1c','#ffe92e','#34d64a','#2e9bff','#a45cff'] },
+];
+const BOT_NAMES = ['Jiboia','Naja','Mamba','Víbora','Sucuri','Cascavel','Anaconda','Python','Medusa','Ninja','Kaa','Basilisco',
+  'Ouroboros','Slinky','Nagini','Viper','Serpente','Pixel','Turbo','Sombra','Rei','Lenda','Noob','Pro','Mini','Zé','Lia','Bob','Tux','Rasteja'];
+const FOOD_HUES = [0,25,50,95,140,170,195,220,260,290,320,345];
+
+/* ============ Utilidades ============ */
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const rnd = (a,b) => a + Math.random()*(b-a);
+const angDiff = (a,b) => ((a-b+Math.PI)%TAU+TAU)%TAU - Math.PI;
+const ci = v => { const c = Math.floor(v/CELL)+OFF; return c<0?0:c>=DIM?DIM-1:c; };
+const store = {
+  get(k,d){ try { const v = localStorage.getItem(k); return v===null?d:v; } catch(e){ return d; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+};
+
+/* ============ Canvas ============ */
+const cvs = $('c'), ctx = cvs.getContext('2d');
+let W=0, H=0, DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cvs.width = Math.round(W*DPR); cvs.height = Math.round(H*DPR);
+  cvs.style.width = W+'px'; cvs.style.height = H+'px';
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 150));
+resize();
+
+// textura de fundo
+const bgPattern = (() => {
+  const t = document.createElement('canvas'); t.width = t.height = 96;
+  const g = t.getContext('2d');
+  g.fillStyle = 'rgba(120,150,255,.09)';
+  for (const [x,y] of [[24,24],[72,72]]) { g.beginPath(); g.arc(x,y,5,0,TAU); g.fill(); }
+  g.fillStyle = 'rgba(120,150,255,.04)';
+  for (const [x,y] of [[72,24],[24,72]]) { g.beginPath(); g.arc(x,y,3,0,TAU); g.fill(); }
+  return ctx.createPattern(t,'repeat');
+})();
+
+// sprites de comida (brilho pré-renderizado)
+const sprites = new Map();
+function sprite(col){
+  let c = sprites.get(col);
+  if (c) return c;
+  c = document.createElement('canvas'); c.width = c.height = 48;
+  const g = c.getContext('2d');
+  g.shadowColor = col; g.shadowBlur = 12;
+  g.fillStyle = col; g.beginPath(); g.arc(24,24,10,0,TAU); g.fill();
+  g.shadowBlur = 0; g.fillStyle = 'rgba(255,255,255,.55)';
+  g.beginPath(); g.arc(21,21,4,0,TAU); g.fill();
+  sprites.set(col,c);
+  return c;
+}
+
+/* ============ Estado do mundo ============ */
+const foodGrid = Array.from({length:DIM*DIM}, () => []);
+const segGrid  = Array.from({length:DIM*DIM}, () => []);
+let foodCount = 0;
+const flying = [];                // comida sendo sugada
+const snakes = [];
+let player = null;
+let state = 'menu';               // menu | play | dead
+let paused = false;
+let worldT = 0;
+let leaderboard = [];
+let lbTimer = 0;
+const toasts = [];
+const respawns = [];
+const cam = { x:0, y:0, z:1 };
+let killerName = '';
+
+/* ============ Comida ============ */
+function foodRadius(v){ return Math.min(11, 3 + Math.sqrt(v)*2.4); }
+function addFood(x, y, v, col){
+  const f = { x, y, v, col, r: foodRadius(v), ph: Math.random()*TAU };
+  foodGrid[ci(y)*DIM + ci(x)].push(f);
+  foodCount++;
+  return f;
+}
+function spawnRegularFood(){
+  const a = Math.random()*TAU, d = Math.sqrt(Math.random())*(ARENA_R-40);
+  const big = Math.random() < 0.05;
+  const v = big ? rnd(2.5,4) : rnd(0.6,1.6);
+  addFood(Math.cos(a)*d, Math.sin(a)*d, v, `hsl(${FOOD_HUES[(Math.random()*FOOD_HUES.length)|0]},100%,62%)`);
+}
+for (let i=0;i<FOOD_TARGET;i++) spawnRegularFood();
+
+/* ============ Cobras ============ */
+const segCountFor = m => Math.min(1000, Math.floor(6 + m*0.8));
+function updateDims(s){
+  s.r = Math.min(26, 8 + Math.sqrt(s.mass)*0.55);
+  s.space = s.r*0.55;
+}
+function makeSnake(name, skin, mass, x, y, isPlayer){
+  const ang = rnd(0,TAU);
+  const s = { name, skin, isPlayer, angle:ang, target:ang, mass, r:0, space:0, segs:[],
+    boost:false, boosting:false, boostAcc:0, alive:true, kills:0,
+    turnMul: isPlayer?1:rnd(0.8,1.1), aggr: Math.random()<0.45, thinkT: rnd(0,10), wander: ang };
+  updateDims(s);
+  const n = segCountFor(mass);
+  for (let i=0;i<n;i++) s.segs.push({ x:x-Math.cos(ang)*i*s.space, y:y-Math.sin(ang)*i*s.space, o:s, h:i===0 });
+  snakes.push(s);
+  return s;
+}
+function findSpawn(){
+  for (let i=0;i<25;i++){
+    const a = rnd(0,TAU), d = Math.sqrt(Math.random())*(ARENA_R-450);
+    const x = Math.cos(a)*d, y = Math.sin(a)*d;
+    if (!blockedAt(null, x, y, 260)) return [x,y];
+  }
+  return [0,0];
+}
+function spawnBot(){
+  const [x,y] = findSpawn();
+  const skin = SKINS[(Math.random()*SKINS.length)|0];
+  const mass = Math.random()<0.2 ? rnd(40,150) : rnd(START_MASS, 40);
+  makeSnake(BOT_NAMES[(Math.random()*BOT_NAMES.length)|0], skin, mass, x, y, false);
+}
+
+function segColor(s,i){ const c = s.skin.c; return c[((i/3)|0)%c.length]; }
+
+function kill(s, killer, wall){
+  if (!s.alive) return;
+  s.alive = false;
+  const idx = snakes.indexOf(s); if (idx>=0) snakes.splice(idx,1);
+  if (!wall || WALL_DROPS_FOOD){
+    const n = s.segs.length, count = Math.min(90, Math.max(8, (n/1.5)|0));
+    const total = s.mass*0.85;
+    for (let k=0;k<count;k++){
+      const seg = s.segs[Math.min(n-1, (k*n/count)|0)];
+      const v = Math.max(0.5, total/count*rnd(0.7,1.3));
+      addFood(seg.x+rnd(-s.r,s.r)*0.7, seg.y+rnd(-s.r,s.r)*0.7, v, segColor(s,(k*n/count)|0));
+    }
+  }
+  if (killer && killer.alive){
+    killer.kills++;
+    if (killer.isPlayer) toast(`Você eliminou ${s.name}!`);
+  }
+  if (s.isPlayer){
+    state = 'dead';
+    killerName = wall ? 'a borda da arena' : (killer ? killer.name : '');
+    setTimeout(showResult, 900);
+  } else {
+    respawns.push(worldT + rnd(2,5));
+  }
+}
+
+/* ============ Colisão / consulta ============ */
+function blockedAt(self, x, y, rad){
+  if (x*x+y*y > (ARENA_R-70)*(ARENA_R-70)) return true;
+  const cx = ci(x), cy = ci(y);
+  for (let gy=Math.max(0,cy-1); gy<=Math.min(DIM-1,cy+1); gy++)
+    for (let gx=Math.max(0,cx-1); gx<=Math.min(DIM-1,cx+1); gx++){
+      const arr = segGrid[gy*DIM+gx];
+      for (let i=0;i<arr.length;i++){
+        const p = arr[i]; if (p.o===self) continue;
+        const dx=p.x-x, dy=p.y-y, rr=rad+p.o.r;
+        if (dx*dx+dy*dy < rr*rr) return true;
+      }
+    }
+  return false;
+}
+function buildSegGrid(){
+  for (let i=0;i<segGrid.length;i++) segGrid[i].length = 0;
+  for (const s of snakes){
+    const sg = s.segs;
+    for (let i=0;i<sg.length;i++){ const p = sg[i]; segGrid[ci(p.y)*DIM+ci(p.x)].push(p); }
+  }
+}
+function checkCollisions(){
+  const deaths = [];
+  for (const s of snakes){
+    const h = s.segs[0];
+    if (Math.hypot(h.x,h.y) > ARENA_R - s.r*0.5){ deaths.push([s,null,true]); continue; }
+    const cx = ci(h.x), cy = ci(h.y);
+    let hit = null;
+    for (let gy=Math.max(0,cy-1); gy<=Math.min(DIM-1,cy+1) && !hit; gy++)
+      for (let gx=Math.max(0,cx-1); gx<=Math.min(DIM-1,cx+1) && !hit; gx++){
+        const arr = segGrid[gy*DIM+gx];
+        for (let i=0;i<arr.length;i++){
+          const p = arr[i]; if (p.o===s || p.h) continue;
+          const dx=p.x-h.x, dy=p.y-h.y, rr=(s.r+p.o.r)*0.78;
+          if (dx*dx+dy*dy < rr*rr){ hit = p.o; break; }
+        }
+      }
+    if (hit) deaths.push([s,hit,false]);
+  }
+  for (const [s,k,w] of deaths) kill(s,k,w);
+}
+
+/* ============ Comer ============ */
+function eatFood(s, k){
+  const h = s.segs[0], M = s.r*2 + 28, M2 = M*M;
+  const x0=ci(h.x-M), x1=ci(h.x+M), y0=ci(h.y-M), y1=ci(h.y+M);
+  for (let gy=y0; gy<=y1; gy++)
+    for (let gx=x0; gx<=x1; gx++){
+      const arr = foodGrid[gy*DIM+gx];
+      for (let i=arr.length-1;i>=0;i--){
+        const f = arr[i], dx=h.x-f.x, dy=h.y-f.y;
+        if (dx*dx+dy*dy < M2){
+          arr[i] = arr[arr.length-1]; arr.pop(); foodCount--;
+          f.t = s; flying.push(f);
+        }
+      }
+    }
+}
+function updateFlying(k){
+  for (let i=flying.length-1;i>=0;i--){
+    const f = flying[i], s = f.t;
+    if (!s.alive){ flying.splice(i,1); addFood(f.x,f.y,f.v,f.col); continue; }
+    const h = s.segs[0], dx=h.x-f.x, dy=h.y-f.y, d=Math.hypot(dx,dy);
+    if (d < s.r + 3){ s.mass += f.v; flying[i]=flying[flying.length-1]; flying.pop(); continue; }
+    const mv = Math.min(d, (5 + d*0.18)*k);
+    f.x += dx/d*mv; f.y += dy/d*mv;
+  }
+}
+
+/* ============ Movimento ============ */
+function stepSnake(s, k){
+  const diff = angDiff(s.target, s.angle);
+  const maxT = 0.11*s.turnMul/(1 + (s.r-8)*0.03)*k;
+  s.angle += clamp(diff, -maxT, maxT);
+
+  s.boosting = s.boost && s.mass > MIN_BOOST_MASS;
+  let sp = BASE_SPEED;
+  if (s.boosting){
+    sp = BOOST_SPEED;
+    const cost = BOOST_COST*k;
+    s.mass -= cost; s.boostAcc += cost;
+    if (s.boostAcc >= 0.6){
+      const t = s.segs[s.segs.length-1];
+      addFood(t.x+rnd(-4,4), t.y+rnd(-4,4), s.boostAcc*0.7, s.skin.c[0]);
+      s.boostAcc = 0;
+    }
+  }
+  updateDims(s);
+
+  const sg = s.segs, h = sg[0];
+  h.x += Math.cos(s.angle)*sp*k; h.y += Math.sin(s.angle)*sp*k;
+
+  const want = segCountFor(s.mass);
+  while (sg.length < want){ const t = sg[sg.length-1]; sg.push({ x:t.x, y:t.y, o:s, h:false }); }
+  while (sg.length > want && sg.length > 2) sg.pop();
+
+  const sps = s.space;
+  for (let i=1;i<sg.length;i++){
+    const a = sg[i-1], b = sg[i], dx=a.x-b.x, dy=a.y-b.y, d=Math.hypot(dx,dy);
+    if (d > sps){ const f=(d-sps)/d; b.x += dx*f; b.y += dy*f; }
+  }
+}
+
+/* ============ IA dos bots ============ */
+const OFFS = [0,.35,-.35,.7,-.7,1.1,-1.1,1.6,-1.6,2.2,-2.2,Math.PI];
+function think(b){
+  const h = b.segs[0];
+  let want = b.angle + rnd(-0.4,0.4), boost = false;
+  const dist0 = Math.hypot(h.x,h.y);
+  if (dist0 > ARENA_R*0.8) want = Math.atan2(-h.y,-h.x);
+
+  // comida mais valiosa por perto
+  const M = 380, rc = Math.ceil(M/CELL);
+  const cx=ci(h.x), cy=ci(h.y);
+  let best=null, bs=0;
+  for (let gy=Math.max(0,cy-rc); gy<=Math.min(DIM-1,cy+rc); gy++)
+    for (let gx=Math.max(0,cx-rc); gx<=Math.min(DIM-1,cx+rc); gx++){
+      const arr = foodGrid[gy*DIM+gx];
+      for (let i=0;i<arr.length;i++){
+        const f=arr[i], d=Math.hypot(f.x-h.x,f.y-h.y);
+        if (d<M){ const sc=f.v/(d+40); if (sc>bs){ bs=sc; best=f; } }
+      }
+    }
+  if (best) want = Math.atan2(best.y-h.y, best.x-h.x);
+
+  // caçar menores / fugir de maiores
+  for (const o of snakes){
+    if (o===b) continue;
+    const oh=o.segs[0], d=Math.hypot(oh.x-h.x, oh.y-h.y);
+    if (b.aggr && d<500 && o.mass < b.mass*0.9){
+      const lead = Math.min(d*0.6, 160);
+      want = Math.atan2(oh.y+Math.sin(o.angle)*lead-h.y, oh.x+Math.cos(o.angle)*lead-h.x);
+      if (d<320 && b.mass>MIN_BOOST_MASS+14 && Math.random()<0.8) boost = true;
+    } else if (d<260 && o.mass > b.mass*1.1){
+      want = Math.atan2(h.y-oh.y, h.x-oh.x);
+      if (d<160 && b.mass>MIN_BOOST_MASS+6) boost = true;
+    }
+  }
+
+  // raios de segurança
+  const k = boost ? 1.6 : 1;
+  const ds = [(b.r*3+30)*k, (b.r*6+80)*k, (b.r*10+160)*k];
+  let chosen = want+Math.PI, found = false;
+  for (const off of OFFS){
+    const a = want+off; let ok = true;
+    for (const d of ds){
+      if (blockedAt(b, h.x+Math.cos(a)*d, h.y+Math.sin(a)*d, b.r*1.1+6)){ ok=false; break; }
+    }
+    if (ok){ chosen=a; found=true; break; }
+  }
+  if (!found) boost = false;
+  b.target = chosen; b.boost = boost;
+  b.thinkT = rnd(7,14);
+}
+
+/* ============ Entrada ============ */
+const input = { angle:0, mouseBoost:false, keyBoost:false, btnBoost:false, left:false, right:false };
+function pointerAngle(e){
+  const dx = e.clientX - W/2, dy = e.clientY - H/2;
+  if (dx*dx+dy*dy > 100) input.angle = Math.atan2(dy,dx);
+}
+function setTouchMode(){ document.body.classList.add('touch'); }
+cvs.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'mouse') setTouchMode();
+  pointerAngle(e);
+  try { cvs.setPointerCapture(e.pointerId); } catch(_){}
+  if (e.pointerType==='mouse' && e.button===0) input.mouseBoost = true;
+});
+cvs.addEventListener('pointermove', e => { pointerAngle(e); });
+const endPtr = e => { if (e.pointerType==='mouse') input.mouseBoost = false; };
+cvs.addEventListener('pointerup', endPtr);
+cvs.addEventListener('pointercancel', endPtr);
+window.addEventListener('blur', () => { input.mouseBoost = input.keyBoost = input.btnBoost = input.left = input.right = false; boostEl.classList.remove('on'); });
+cvs.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('gesturestart', e => e.preventDefault());
+
+const boostEl = $('boost');
+boostEl.addEventListener('pointerdown', e => { e.preventDefault(); input.btnBoost = true; boostEl.classList.add('on'); try{boostEl.setPointerCapture(e.pointerId);}catch(_){} });
+const relBtn = () => { input.btnBoost = false; boostEl.classList.remove('on'); };
+boostEl.addEventListener('pointerup', relBtn);
+boostEl.addEventListener('pointercancel', relBtn);
+
+window.addEventListener('keydown', e => {
+  if (e.target && e.target.id==='nick') { if (e.key==='Enter') startGame(); return; }
+  switch (e.code){
+    case 'Space': case 'ShiftLeft': case 'ShiftRight': case 'ArrowUp': case 'KeyW': input.keyBoost = true; e.preventDefault(); break;
+    case 'ArrowLeft': case 'KeyA': input.left = true; e.preventDefault(); break;
+    case 'ArrowRight': case 'KeyD': input.right = true; e.preventDefault(); break;
+    case 'KeyP': if (state==='play') paused = !paused; break;
+    case 'Enter': if (state==='dead' || state==='menu') startGame(); break;
+  }
+});
+window.addEventListener('keyup', e => {
+  switch (e.code){
+    case 'Space': case 'ShiftLeft': case 'ShiftRight': case 'ArrowUp': case 'KeyW': input.keyBoost = false; break;
+    case 'ArrowLeft': case 'KeyA': input.left = false; break;
+    case 'ArrowRight': case 'KeyD': input.right = false; break;
+  }
+});
+
+/* ============ Menu ============ */
+const menuEl = $('menu'), nickEl = $('nick'), skinsEl = $('skins');
+let skinIdx = Math.min(SKINS.length-1, Math.max(0, parseInt(store.get('cobrinha.skin','0'),10) || 0));
+let best = parseInt(store.get('cobrinha.best','0'),10) || 0;
+nickEl.value = store.get('cobrinha.nick','');
+SKINS.forEach((sk,i) => {
+  const b = document.createElement('button');
+  b.className = 'sk' + (i===skinIdx?' sel':''); b.title = sk.n; b.setAttribute('aria-label', sk.n);
+  const stops = sk.c.map((c,j) => `${c} ${j/sk.c.length*100}% ${(j+1)/sk.c.length*100}%`).join(',');
+  b.style.background = `linear-gradient(135deg, ${stops})`;
+  b.addEventListener('click', () => {
+    skinIdx = i; store.set('cobrinha.skin', String(i));
+    [...skinsEl.children].forEach((el,j) => el.classList.toggle('sel', j===i));
+  });
+  skinsEl.appendChild(b);
+});
+$('play').addEventListener('click', startGame);
+if (matchMedia('(pointer:coarse)').matches) setTouchMode();
+
+const score = s => Math.floor(s.mass*10);
+function showResult(){
+  if (state !== 'dead') return;
+  const sc = score(player);
+  if (sc > best){ best = sc; store.set('cobrinha.best', String(best)); }
+  $('resScore').textContent = sc; $('resKills').textContent = player.kills; $('resBest').textContent = best;
+  $('resKiller').textContent = killerName ? `Eliminado por ${killerName}` : '';
+  $('result').style.display = 'block';
+  $('play').textContent = 'Jogar de novo';
+  document.body.classList.remove('playing');
+  menuEl.classList.remove('hidden');
+}
+function startGame(){
+  const name = (nickEl.value.trim() || 'Cobrinha').slice(0,14);
+  store.set('cobrinha.nick', nickEl.value.trim());
+  if (player && player.alive) kill(player, null, true);
+  const [x,y] = findSpawn();
+  player = makeSnake(name, SKINS[skinIdx], START_MASS, x, y, true);
+  player.target = player.angle;
+  input.angle = player.angle;
+  cam.x = x; cam.y = y;
+  state = 'play'; paused = false;
+  menuEl.classList.add('hidden');
+  document.body.classList.add('playing');
+  $('result').style.display = 'none';
+  nickEl.blur();
+}
+
+/* ============ Loop de simulação ============ */
+function toast(text){ toasts.push({ text, t:2.4 }); if (toasts.length>3) toasts.shift(); }
+
+function step(k){
+  worldT += k/60;
+
+  if (state==='play' && player && player.alive){
+    if (input.left || input.right) player.target = player.angle + ((input.right?1:0)-(input.left?1:0))*0.7;
+    else player.target = input.angle;
+    player.boost = input.mouseBoost || input.keyBoost || input.btnBoost;
+  }
+  for (const b of snakes){
+    if (b.isPlayer) continue;
+    b.thinkT -= k;
+    if (b.thinkT <= 0) think(b);
+  }
+  for (const s of snakes.slice()) if (s.alive) stepSnake(s,k);
+
+  buildSegGrid();
+  checkCollisions();
+
+  for (const s of snakes) eatFood(s,k);
+  updateFlying(k);
+
+  if (foodCount < FOOD_TARGET){
+    const n = Math.min(FOOD_TARGET-foodCount, Math.ceil(6*k));
+    for (let i=0;i<n;i++) spawnRegularFood();
+  }
+  while (respawns.length && respawns[0] <= worldT){ respawns.shift(); spawnBot(); }
+  let botCount = 0; for (const s of snakes) if (!s.isPlayer) botCount++;
+  if (botCount + respawns.length < BOT_COUNT) spawnBot();
+
+  lbTimer -= k;
+  if (lbTimer <= 0){ lbTimer = 24; leaderboard = snakes.slice().sort((a,b) => b.mass - a.mass); }
+  for (let i=toasts.length-1;i>=0;i--){ toasts[i].t -= k/60; if (toasts[i].t<=0) toasts.splice(i,1); }
+}
+
+/* ============ Render ============ */
+function drawSnake(s, vx0, vy0, vx1, vy1, z){
+  const sg = s.segs, n = sg.length, r = s.r, cols = s.skin.c, cl = cols.length;
+  const h = sg[0];
+  if (h.x < vx0-r-3000 || h.x > vx1+r+3000) { /* cabeça longe: ainda pode ter corpo visível */ }
+  const lw = Math.max(1.2, r*0.1);
+  ctx.lineWidth = lw; ctx.strokeStyle = 'rgba(0,0,0,.28)';
+
+  if (s.boosting){
+    ctx.globalAlpha = 0.16; ctx.fillStyle = cols[0];
+    for (let i=n-1;i>=0;i-=2){
+      const p = sg[i]; if (p.x<vx0-r*2||p.x>vx1+r*2||p.y<vy0-r*2||p.y>vy1+r*2) continue;
+      ctx.beginPath(); ctx.arc(p.x,p.y,r*1.8,0,TAU); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  for (let i=n-1;i>=0;i--){
+    const p = sg[i];
+    if (p.x<vx0-r||p.x>vx1+r||p.y<vy0-r||p.y>vy1+r) continue;
+    const taper = i > n-8 ? 0.6 + 0.4*Math.min(1,(n-1-i)/7) : 1;
+    ctx.fillStyle = cols[((i/3)|0)%cl];
+    ctx.beginPath(); ctx.arc(p.x,p.y,r*taper,0,TAU); ctx.fill(); ctx.stroke();
+  }
+  if (h.x<vx0-r||h.x>vx1+r||h.y<vy0-r||h.y>vy1+r) return;
+  // olhos
+  const ca=Math.cos(s.angle), sa=Math.sin(s.angle);
+  for (const sd of [-1,1]){
+    const ex = h.x + ca*r*0.38 - sa*r*0.58*sd, ey = h.y + sa*r*0.38 + ca*r*0.58*sd;
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(ex,ey,r*0.42,0,TAU); ctx.fill();
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(ex+ca*r*0.16,ey+sa*r*0.16,r*0.22,0,TAU); ctx.fill();
+  }
+  if (!s.isPlayer){
+    ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font=`600 ${Math.round(13/z)}px system-ui,sans-serif`;
+    ctx.textAlign='center'; ctx.fillText(s.name, h.x, h.y - r - 8/z);
+  }
+}
+
+function render(dt){
+  // câmera
+  let focus = null;
+  if (state==='menu') focus = leaderboard[0] || snakes[0];
+  else if (player && player.alive) focus = player;
+  let tz = 1;
+  const baseZ = clamp(Math.min(W,H)/650, 0.55, 1.15);
+  if (focus){
+    const h = focus.segs[0], f = 1 - Math.pow(0.0005, dt);
+    cam.x += (h.x-cam.x)*Math.min(1,f*1.0+0.15); cam.y += (h.y-cam.y)*Math.min(1,f*1.0+0.15);
+    tz = baseZ/(1 + (focus.r-8)*0.04 + focus.segs.length*0.0003);
+    if (state==='menu') tz *= 0.9;
+  } else tz = cam.z;
+  cam.z += (tz-cam.z)*Math.min(1, dt*3);
+  const z = cam.z;
+
+  // mundo
+  ctx.setTransform(DPR*z,0,0,DPR*z, DPR*(W/2-cam.x*z), DPR*(H/2-cam.y*z));
+  const vx0 = cam.x - W/2/z, vy0 = cam.y - H/2/z, vx1 = cam.x + W/2/z, vy1 = cam.y + H/2/z;
+  ctx.fillStyle = '#2a0a14'; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,TAU); ctx.clip();
+  ctx.fillStyle = '#0c1220'; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
+  ctx.fillStyle = bgPattern; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
+  ctx.restore();
+
+  // comida
+  const t = performance.now()/1000;
+  const gx0=ci(vx0-20), gx1=ci(vx1+20), gy0=ci(vy0-20), gy1=ci(vy1+20);
+  for (let gy=gy0; gy<=gy1; gy++)
+    for (let gx=gx0; gx<=gx1; gx++){
+      const arr = foodGrid[gy*DIM+gx];
+      for (let i=0;i<arr.length;i++){
+        const f = arr[i];
+        if (f.x<vx0-20||f.x>vx1+20||f.y<vy0-20||f.y>vy1+20) continue;
+        const sz = f.r*2.4*(1 + 0.12*Math.sin(t*3+f.ph));
+        ctx.drawImage(sprite(f.col), f.x-sz, f.y-sz, sz*2, sz*2);
+      }
+    }
+  for (const f of flying){ const sz=f.r*2.4; ctx.drawImage(sprite(f.col), f.x-sz, f.y-sz, sz*2, sz*2); }
+
+  // cobras (jogador por cima)
+  for (const s of snakes) if (!s.isPlayer) drawSnake(s,vx0,vy0,vx1,vy1,z);
+  if (player && player.alive) drawSnake(player,vx0,vy0,vx1,vy1,z);
+
+  // borda
+  ctx.lineWidth = 40; ctx.strokeStyle = 'rgba(255,50,80,.18)';
+  ctx.beginPath(); ctx.arc(0,0,ARENA_R+20,0,TAU); ctx.stroke();
+  ctx.lineWidth = 10; ctx.strokeStyle = '#ff3355';
+  ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,TAU); ctx.stroke();
+
+  // HUD (espaço de tela)
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  if (player && player.alive){
+    const d = ARENA_R - Math.hypot(player.segs[0].x, player.segs[0].y);
+    if (d < 350){ ctx.fillStyle = `rgba(255,30,60,${(1-d/350)*0.3})`; ctx.fillRect(0,0,W,H); }
+  }
+  if (state === 'play' || state === 'dead') drawHUD();
+  if (paused){
+    ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.font='700 32px system-ui,sans-serif'; ctx.textAlign='center';
+    ctx.fillText('Pausado — pressione P', W/2, H/2);
+  }
+}
+
+function drawHUD(){
+  const small = W < 600;
+  const m = small ? 10 : 16;
+  ctx.textBaseline = 'alphabetic';
+
+  // placar inferior esquerdo
+  if (player){
+    const rank = leaderboard.indexOf(player)+1;
+    ctx.textAlign = 'left';
+    ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 6;
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${small?20:26}px system-ui,sans-serif`;
+    ctx.fillText(`${score(player)} pts`, m, H - m - (small?26:34));
+    ctx.font = `500 ${small?12:14}px system-ui,sans-serif`; ctx.fillStyle = '#c8d4f0';
+    ctx.fillText(`Posição ${rank||'-'} de ${leaderboard.length}  ·  Abates ${player.kills}  ·  Recorde ${Math.max(best,score(player))}`, m, H - m - (small?8:12));
+    ctx.shadowBlur = 0;
+  }
+
+  // ranking
+  const rows = small ? 6 : 10, rw = small ? 150 : 200, rh = small ? 16 : 20;
+  const rx = W - rw - m, ry = m;
+  ctx.fillStyle = 'rgba(8,12,24,.55)';
+  roundRect(rx-8, ry-6, rw+16, rh*(rows+2)+10, 10); ctx.fill();
+  ctx.font = `700 ${small?11:13}px system-ui,sans-serif`; ctx.fillStyle='#8fa0c4'; ctx.textAlign='left';
+  ctx.fillText('RANKING', rx, ry+rh-4);
+  let shown = false;
+  for (let i=0;i<Math.min(rows,leaderboard.length);i++){
+    const s = leaderboard[i], y = ry + rh*(i+2) - 4, me = s===player; if (me) shown = true;
+    ctx.fillStyle = me ? '#39ff88' : '#e6edff';
+    ctx.font = `${me?700:500} ${small?11:13}px system-ui,sans-serif`;
+    ctx.textAlign='left'; ctx.fillText(`${i+1}. ${s.name.slice(0,small?9:12)}`, rx, y);
+    ctx.textAlign='right'; ctx.fillText(score(s), rx+rw, y);
+  }
+  if (!shown && player && player.alive){
+    const y = ry + rh*(rows+2) - 4;
+    ctx.fillStyle='#39ff88'; ctx.font=`700 ${small?11:13}px system-ui,sans-serif`;
+    ctx.textAlign='left'; ctx.fillText(`${leaderboard.indexOf(player)+1}. ${player.name.slice(0,12)}`, rx, y);
+    ctx.textAlign='right'; ctx.fillText(score(player), rx+rw, y);
+  }
+
+  // minimapa
+  const mr = small ? 44 : 60, mx = m + mr, my = m + mr;
+  ctx.fillStyle='rgba(8,12,24,.6)'; ctx.beginPath(); ctx.arc(mx,my,mr,0,TAU); ctx.fill();
+  ctx.strokeStyle='rgba(255,51,85,.8)'; ctx.lineWidth=2; ctx.stroke();
+  for (const s of snakes){
+    const h = s.segs[0]; if (s.isPlayer) continue;
+    ctx.fillStyle = s.skin.c[0]; ctx.globalAlpha = .6;
+    ctx.fillRect(mx + h.x/ARENA_R*mr - 1, my + h.y/ARENA_R*mr - 1, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  if (player && player.alive){
+    const h = player.segs[0];
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(mx + h.x/ARENA_R*mr, my + h.y/ARENA_R*mr, 3, 0, TAU); ctx.fill();
+  }
+
+  // avisos
+  ctx.textAlign='center';
+  toasts.forEach((tt,i) => {
+    ctx.globalAlpha = Math.min(1, tt.t);
+    ctx.fillStyle='#ffe066'; ctx.font=`700 ${small?15:18}px system-ui,sans-serif`;
+    ctx.fillText(tt.text, W/2, (small?100:90) + i*24);
+  });
+  ctx.globalAlpha = 1;
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+/* ============ Início ============ */
+for (let i=0;i<BOT_COUNT;i++) spawnBot();
+buildSegGrid();
+leaderboard = snakes.slice().sort((a,b) => b.mass - a.mass);
+if (leaderboard[0]){ cam.x = leaderboard[0].segs[0].x; cam.y = leaderboard[0].segs[0].y; }
+
+let last = performance.now();
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt = (now-last)/1000; last = now;
+  if (!(dt>0)) dt = 0.016;
+  if (dt > 0.1) dt = 0.1;
+  if (!paused){
+    let rem = dt*60;
+    while (rem > 0.0001){ const k = Math.min(rem,1); step(k); rem -= k; }
+  }
+  render(dt);
+}
+requestAnimationFrame(frame);
+
+// para testes / depuração
+window.__game = { snakes, get player(){ return player; }, startGame, get state(){ return state; } };
+})();
+</script>
+</body>
+</html>
