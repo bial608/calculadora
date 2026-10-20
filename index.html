@@ -165,7 +165,7 @@ const DEFAULTS = {
   arenaR:3000, foodTarget: COARSE ? 1800 : 2600, foodValue:1, deathDrop:0.85,
   wallKills:true, wallDrops:false, timeScale:1,
   // câmera / interface
-  zoom:1, autoZoom:true, showNames:true, showMinimap:true, showRanking:true, showGrid:true, showFps:false, pauseOnPanel:true,
+  quality:'auto', zoom:1, autoZoom:true, showNames:true, showMinimap:true, showRanking:true, showGrid:true, showFps:false, pauseOnPanel:true,
 };
 const CFG = Object.assign({}, DEFAULTS);
 let ARENA_R = CFG.arenaR;
@@ -189,6 +189,7 @@ const FOOD_HUES = [0,25,50,95,140,170,195,220,260,290,320,345];
 /* ============ Utilidades ============ */
 const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const hyp = (a,b) => Math.sqrt(a*a+b*b);
 const rnd = (a,b) => a + Math.random()*(b-a);
 const angDiff = (a,b) => ((a-b+Math.PI)%TAU+TAU)%TAU - Math.PI;
 const ci = v => { const c = Math.floor(v/CELL)+OFF; return c<0?0:c>=DIM?DIM-1:c; };
@@ -204,15 +205,20 @@ function saveCfg(){ store.set('cobrinha.cfg', JSON.stringify(CFG)); }
     for (const k in DEFAULTS) if (typeof sv[k] === typeof DEFAULTS[k] && (typeof sv[k] !== 'number' || isFinite(sv[k]))) CFG[k] = sv[k];
     ARENA_R = CFG.arenaR;
   } catch(e){}
+  if (!['auto','high','medium','low'].includes(CFG.quality)) CFG.quality = 'auto';
 })();
 
 /* ============ Canvas ============ */
-const cvs = $('c'), ctx = cvs.getContext('2d');
-let W=0, H=0, DPR=1;
+const cvs = $('c'), ctx = cvs.getContext('2d', { alpha:false });
+let W=0, H=0, RS=1, QL=0, autoQ = COARSE ? 1 : 0, resScale = 1;   // RS: pixels do canvas por px CSS; QL: nível de qualidade 0 alta … 2 baixa
+const qLevel = () => CFG.quality==='auto' ? autoQ : CFG.quality==='medium' ? 1 : CFG.quality==='low' ? 2 : 0;
 function resize(){
-  DPR = Math.min(window.devicePixelRatio||1, 2);
+  QL = qLevel();
+  const cap = QL===0 ? 2 : QL===1 ? 1.5 : 1;
+  RS = Math.min(window.devicePixelRatio||1, cap) * (CFG.quality==='auto' ? resScale : 1);
   W = window.innerWidth; H = window.innerHeight;
-  cvs.width = Math.round(W*DPR); cvs.height = Math.round(H*DPR);
+  const cw = Math.round(W*RS), ch = Math.round(H*RS);
+  if (cvs.width !== cw || cvs.height !== ch){ cvs.width = cw; cvs.height = ch; }
   cvs.style.width = W+'px'; cvs.style.height = H+'px';
 }
 window.addEventListener('resize', resize);
@@ -354,24 +360,35 @@ function blockedAt(self, x, y, rad){
     }
   return false;
 }
+const dirtyCells = [];
+const INV = 1/CELL;
 function buildSegGrid(){
-  for (let i=0;i<segGrid.length;i++) segGrid[i].length = 0;
-  for (const s of snakes){
-    const sg = s.segs;
-    for (let i=0;i<sg.length;i++){ const p = sg[i]; segGrid[ci(p.y)*DIM+ci(p.x)].push(p); }
+  for (let i=0;i<dirtyCells.length;i++) dirtyCells[i].length = 0;
+  dirtyCells.length = 0;
+  for (let j=0;j<snakes.length;j++){
+    const sg = snakes[j].segs;
+    // indexa 1 a cada 2 segmentos (espaçamento ≈ 1,1·raio, bem abaixo do raio de colisão)
+    for (let i=0;i<sg.length;i+=2){
+      const p = sg[i];
+      let cx = (p.x*INV + OFF)|0, cy = (p.y*INV + OFF)|0;
+      cx = cx<0?0:cx>=DIM?DIM-1:cx; cy = cy<0?0:cy>=DIM?DIM-1:cy;
+      const a = segGrid[cy*DIM+cx];
+      if (a.length === 0) dirtyCells.push(a);
+      a.push(p);
+    }
   }
 }
 function checkCollisions(){
-  const deaths = [];
+  let deaths = null;
   for (const s of snakes){
     if (s.isPlayer && CFG.god) continue;
     const h = s.segs[0];
-    if (Math.hypot(h.x,h.y) > ARENA_R - s.r*0.5){ deaths.push([s,null,true]); continue; }
+    if (hyp(h.x,h.y) > ARENA_R - s.r*0.5){ (deaths || (deaths = [])).push([s,null,true]); continue; }
     if (CFG.selfCollide){
       const sg = s.segs, from = Math.ceil(s.r*3/s.space)+4, rr2 = s.r*s.r*0.8;
       let self = false;
       for (let i=from;i<sg.length;i++){ const dx=sg[i].x-h.x, dy=sg[i].y-h.y; if (dx*dx+dy*dy < rr2){ self = true; break; } }
-      if (self){ deaths.push([s,s,false]); continue; }
+      if (self){ (deaths || (deaths = [])).push([s,s,false]); continue; }
     }
     const cx = ci(h.x), cy = ci(h.y);
     let hit = null;
@@ -384,14 +401,14 @@ function checkCollisions(){
           if (dx*dx+dy*dy < rr*rr){ hit = p.o; break; }
         }
       }
-    if (hit) deaths.push([s,hit,false]);
+    if (hit) (deaths || (deaths = [])).push([s,hit,false]);
   }
-  for (const [s,k,w] of deaths) kill(s,k,w);
+  if (deaths) for (const [s,k,w] of deaths) kill(s,k,w);
 }
 
 /* ============ Comer ============ */
 function eatFood(s, k){
-  const h = s.segs[0], M = (s.r*2 + 28)*CFG.magnet, M2 = M*M;
+  const h = s.segs[0], M = Math.min(600, (s.r*2 + 28)*CFG.magnet), M2 = M*M;
   const x0=ci(h.x-M), x1=ci(h.x+M), y0=ci(h.y-M), y1=ci(h.y+M);
   for (let gy=y0; gy<=y1; gy++)
     for (let gx=x0; gx<=x1; gx++){
@@ -409,7 +426,7 @@ function updateFlying(k){
   for (let i=flying.length-1;i>=0;i--){
     const f = flying[i], s = f.t;
     if (!s.alive){ flying.splice(i,1); addFood(f.x,f.y,f.v,f.col); continue; }
-    const h = s.segs[0], dx=h.x-f.x, dy=h.y-f.y, d=Math.hypot(dx,dy);
+    const h = s.segs[0], dx=h.x-f.x, dy=h.y-f.y, d=hyp(dx,dy);
     if (d < s.r + 3){ s.mass += f.v; flying[i]=flying[flying.length-1]; flying.pop(); continue; }
     const mv = Math.min(d, (5 + d*0.18)*k);
     f.x += dx/d*mv; f.y += dy/d*mv;
@@ -440,7 +457,7 @@ function stepSnake(s, k){
   const sg = s.segs, h = sg[0];
   h.x += Math.cos(s.angle)*sp*k; h.y += Math.sin(s.angle)*sp*k;
   if (!CFG.wallKills || (s.isPlayer && CFG.god)){   // sem morte na borda: desliza pela parede
-    const d = Math.hypot(h.x,h.y), lim = ARENA_R - s.r;
+    const d = hyp(h.x,h.y), lim = ARENA_R - s.r;
     if (d > lim){ h.x *= lim/d; h.y *= lim/d; }
   }
 
@@ -450,7 +467,7 @@ function stepSnake(s, k){
 
   const sps = s.space;
   for (let i=1;i<sg.length;i++){
-    const a = sg[i-1], b = sg[i], dx=a.x-b.x, dy=a.y-b.y, d=Math.hypot(dx,dy);
+    const a = sg[i-1], b = sg[i], dx=a.x-b.x, dy=a.y-b.y, d=hyp(dx,dy);
     if (d > sps){ const f=(d-sps)/d; b.x += dx*f; b.y += dy*f; }
   }
 }
@@ -460,7 +477,7 @@ const OFFS = [0,.35,-.35,.7,-.7,1.1,-1.1,1.6,-1.6,2.2,-2.2,Math.PI];
 function think(b){
   const h = b.segs[0];
   let want = b.angle + rnd(-0.4,0.4), boost = false;
-  const dist0 = Math.hypot(h.x,h.y);
+  const dist0 = hyp(h.x,h.y);
   if (dist0 > ARENA_R*0.8) want = Math.atan2(-h.y,-h.x);
 
   // comida mais valiosa por perto
@@ -471,7 +488,7 @@ function think(b){
     for (let gx=Math.max(0,cx-rc); gx<=Math.min(DIM-1,cx+rc); gx++){
       const arr = foodGrid[gy*DIM+gx];
       for (let i=0;i<arr.length;i++){
-        const f=arr[i], d=Math.hypot(f.x-h.x,f.y-h.y);
+        const f=arr[i], d=hyp(f.x-h.x,f.y-h.y);
         if (d<M){ const sc=f.v/(d+40); if (sc>bs){ bs=sc; best=f; } }
       }
     }
@@ -480,7 +497,7 @@ function think(b){
   // caçar menores / fugir de maiores
   for (const o of snakes){
     if (o===b) continue;
-    const oh=o.segs[0], d=Math.hypot(oh.x-h.x, oh.y-h.y);
+    const oh=o.segs[0], d=hyp(oh.x-h.x, oh.y-h.y);
     if (b.aggrRoll < CFG.botAggr && d<500 && o.mass < b.mass*0.9){
       const lead = Math.min(d*0.6, 160);
       want = Math.atan2(oh.y+Math.sin(o.angle)*lead-h.y, oh.x+Math.cos(o.angle)*lead-h.x);
@@ -619,7 +636,7 @@ function step(k){
     b.thinkT -= k;
     if (b.thinkT <= 0) think(b);
   }
-  for (const s of snakes.slice()) if (s.alive) stepSnake(s,k);
+  for (let i=0;i<snakes.length;i++){ const s = snakes[i]; if (s.alive) stepSnake(s,k); }
 
   buildSegGrid();
   checkCollisions();
@@ -646,41 +663,55 @@ function step(k){
 
 /* ============ Render ============ */
 function drawSnake(s, vx0, vy0, vx1, vy1, z){
-  const sg = s.segs, n = sg.length, r = s.r, cols = s.skin.c, cl = cols.length;
-  const h = sg[0];
-  if (h.x < vx0-r-3000 || h.x > vx1+r+3000) { /* cabeça longe: ainda pode ter corpo visível */ }
-  const lw = Math.max(1.2, r*0.1);
-  ctx.lineWidth = lw; ctx.strokeStyle = 'rgba(0,0,0,.28)';
+  const sg = s.segs, n = sg.length, r = s.r, cols = s.skin.c, cl = cols.length, h = sg[0];
+  const rs = r*z;
+  const stride = rs < 1.3 ? 3 : (rs < 2.6 || (QL===2 && rs < 5)) ? 2 : 1;   // menos círculos quando a cobra é pequena na tela
+  const x0 = vx0-r*2, x1 = vx1+r*2, y0 = vy0-r*2, y1 = vy1+r*2;
 
-  if (s.boosting){
-    ctx.globalAlpha = 0.16; ctx.fillStyle = cols[0];
+  if (s.boosting && QL === 0){
+    ctx.globalAlpha = 0.16; ctx.fillStyle = cols[0]; ctx.beginPath();
     for (let i=n-1;i>=0;i-=2){
-      const p = sg[i]; if (p.x<vx0-r*2||p.x>vx1+r*2||p.y<vy0-r*2||p.y>vy1+r*2) continue;
-      ctx.beginPath(); ctx.arc(p.x,p.y,r*1.8,0,TAU); ctx.fill();
+      const p = sg[i]; if (p.x<x0||p.x>x1||p.y<y0||p.y>y1) continue;
+      ctx.moveTo(p.x+r*1.8,p.y); ctx.arc(p.x,p.y,r*1.8,0,TAU);
     }
-    ctx.globalAlpha = 1;
+    ctx.fill(); ctx.globalAlpha = 1;
   }
-  for (let i=n-1;i>=0;i--){
-    const p = sg[i];
-    if (p.x<vx0-r||p.x>vx1+r||p.y<vy0-r||p.y>vy1+r) continue;
-    const taper = i > n-8 ? 0.6 + 0.4*Math.min(1,(n-1-i)/7) : 1;
-    ctx.fillStyle = cols[((i/3)|0)%cl];
-    ctx.beginPath(); ctx.arc(p.x,p.y,r*taper,0,TAU); ctx.fill(); ctx.stroke();
+  const lw = Math.max(1.2, r*0.12);
+  if (QL < 2){                                  // contorno: um único path para o corpo todo
+    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath();
+    for (let i=n-1;i>=0;i-=stride){
+      const p = sg[i]; if (p.x<x0||p.x>x1||p.y<y0||p.y>y1) continue;
+      const rr = r*(i>n-8 ? 0.6+0.4*Math.min(1,(n-1-i)/7) : 1) + lw;
+      ctx.moveTo(p.x+rr,p.y); ctx.arc(p.x,p.y,rr,0,TAU);
+    }
+    ctx.fill();
   }
-  if (h.x<vx0-r||h.x>vx1+r||h.y<vy0-r||h.y>vy1+r) return;
-  // olhos
-  const ca=Math.cos(s.angle), sa=Math.sin(s.angle);
-  for (const sd of [-1,1]){
-    const ex = h.x + ca*r*0.38 - sa*r*0.58*sd, ey = h.y + sa*r*0.38 + ca*r*0.58*sd;
-    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(ex,ey,r*0.42,0,TAU); ctx.fill();
-    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(ex+ca*r*0.16,ey+sa*r*0.16,r*0.22,0,TAU); ctx.fill();
+  let cur = -1, open = false;                    // cor: um fill por faixa de segmentos
+  for (let i=n-1;i>=0;i-=stride){
+    const p = sg[i]; if (p.x<x0||p.x>x1||p.y<y0||p.y>y1) continue;
+    const c = ((i/3)|0)%cl;
+    if (c !== cur){ if (open) ctx.fill(); ctx.fillStyle = cols[c]; ctx.beginPath(); cur = c; open = true; }
+    const rr = r*(i>n-8 ? 0.6+0.4*Math.min(1,(n-1-i)/7) : 1);
+    ctx.moveTo(p.x+rr,p.y); ctx.arc(p.x,p.y,rr,0,TAU);
+  }
+  if (open) ctx.fill();
+
+  if (h.x<x0||h.x>x1||h.y<y0||h.y>y1) return;
+  if (rs > 2.5){                                 // olhos
+    const ca=Math.cos(s.angle), sa=Math.sin(s.angle);
+    for (const sd of [-1,1]){
+      const ex = h.x + ca*r*0.38 - sa*r*0.58*sd, ey = h.y + sa*r*0.38 + ca*r*0.58*sd;
+      ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(ex,ey,r*0.42,0,TAU); ctx.fill();
+      ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(ex+ca*r*0.16,ey+sa*r*0.16,r*0.22,0,TAU); ctx.fill();
+    }
   }
   if (!s.isPlayer && CFG.showNames){
-    ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font=`600 ${Math.round(13/z)}px system-ui,sans-serif`;
+    ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font=nameFont;
     ctx.textAlign='center'; ctx.fillText(s.name, h.x, h.y - r - 8/z);
   }
 }
 
+let nameFont = '';
 function render(dt){
   // câmera
   let focus = null;
@@ -696,31 +727,34 @@ function render(dt){
   } else tz = cam.z;
   cam.z += (tz-cam.z)*Math.min(1, dt*3);
   const z = cam.z;
+  nameFont = `600 ${Math.round(13/z)}px system-ui,sans-serif`;
 
   // mundo
-  ctx.setTransform(DPR*z,0,0,DPR*z, DPR*(W/2-cam.x*z), DPR*(H/2-cam.y*z));
+  ctx.setTransform(RS*z,0,0,RS*z, RS*(W/2-cam.x*z), RS*(H/2-cam.y*z));
   const vx0 = cam.x - W/2/z, vy0 = cam.y - H/2/z, vx1 = cam.x + W/2/z, vy1 = cam.y + H/2/z;
   ctx.fillStyle = '#2a0a14'; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
   ctx.save();
   ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,TAU); ctx.clip();
   ctx.fillStyle = '#0c1220'; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0);
-  if (CFG.showGrid){ ctx.fillStyle = bgPattern; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0); }
+  if (CFG.showGrid && QL === 0){ ctx.fillStyle = bgPattern; ctx.fillRect(vx0,vy0,vx1-vx0,vy1-vy0); }
   ctx.restore();
 
   // comida
   const t = performance.now()/1000;
   const gx0=ci(vx0-20), gx1=ci(vx1+20), gy0=ci(vy0-20), gy1=ci(vy1+20);
+  const pulse = QL === 0, lodPh = z < 0.3 ? 1.6 : z < 0.45 ? 3.2 : 99;
   for (let gy=gy0; gy<=gy1; gy++)
     for (let gx=gx0; gx<=gx1; gx++){
       const arr = foodGrid[gy*DIM+gx];
       for (let i=0;i<arr.length;i++){
         const f = arr[i];
         if (f.x<vx0-20||f.x>vx1+20||f.y<vy0-20||f.y>vy1+20) continue;
-        const sz = f.r*2.4*(1 + 0.12*Math.sin(t*3+f.ph));
-        ctx.drawImage(sprite(f.col), f.x-sz, f.y-sz, sz*2, sz*2);
+        if (f.ph > lodPh && f.v < 2) continue;
+        const sz = f.r*2.4*(pulse ? 1 + 0.12*Math.sin(t*3+f.ph) : 1);
+        ctx.drawImage(f.spr || (f.spr = sprite(f.col)), f.x-sz, f.y-sz, sz*2, sz*2);
       }
     }
-  for (const f of flying){ const sz=f.r*2.4; ctx.drawImage(sprite(f.col), f.x-sz, f.y-sz, sz*2, sz*2); }
+  for (const f of flying){ const sz=f.r*2.4; ctx.drawImage(f.spr || (f.spr = sprite(f.col)), f.x-sz, f.y-sz, sz*2, sz*2); }
 
   // cobras (jogador por cima)
   for (const s of snakes) if (!s.isPlayer) drawSnake(s,vx0,vy0,vx1,vy1,z);
@@ -733,9 +767,9 @@ function render(dt){
   ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,TAU); ctx.stroke();
 
   // HUD (espaço de tela)
-  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.setTransform(RS,0,0,RS,0,0);
   if (player && player.alive){
-    const d = ARENA_R - Math.hypot(player.segs[0].x, player.segs[0].y);
+    const d = ARENA_R - hyp(player.segs[0].x, player.segs[0].y);
     if (d < 350){ ctx.fillStyle = `rgba(255,30,60,${(1-d/350)*0.3})`; ctx.fillRect(0,0,W,H); }
   }
   if (state === 'play' || state === 'dead') drawHUD();
@@ -756,13 +790,14 @@ function drawHUD(){
   if (player){
     const rank = leaderboard.indexOf(player)+1;
     ctx.textAlign = 'left';
-    ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 6;
-    ctx.fillStyle = '#fff';
+    const l1 = `${score(player)} pts`, y1 = H - m - (small?26:34);
+    const l2 = `Posição ${rank||'-'} de ${leaderboard.length}  ·  Abates ${player.kills}  ·  Recorde ${Math.max(best,score(player))}`, y2 = H - m - (small?8:12);
     ctx.font = `700 ${small?20:26}px system-ui,sans-serif`;
-    ctx.fillText(`${score(player)} pts`, m, H - m - (small?26:34));
-    ctx.font = `500 ${small?12:14}px system-ui,sans-serif`; ctx.fillStyle = '#c8d4f0';
-    ctx.fillText(`Posição ${rank||'-'} de ${leaderboard.length}  ·  Abates ${player.kills}  ·  Recorde ${Math.max(best,score(player))}`, m, H - m - (small?8:12));
-    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillText(l1, m+1.5, y1+1.5);
+    ctx.fillStyle = '#fff'; ctx.fillText(l1, m, y1);
+    ctx.font = `500 ${small?12:14}px system-ui,sans-serif`;
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillText(l2, m+1, y2+1);
+    ctx.fillStyle = '#c8d4f0'; ctx.fillText(l2, m, y2);
   }
 
   // ranking
@@ -816,12 +851,11 @@ function drawHUD(){
   ctx.globalAlpha = 1;
 }
 function drawDebug(){
-  ctx.textAlign='left'; ctx.fillStyle='#9fffc0'; ctx.font='600 12px ui-monospace,Menlo,monospace';
-  ctx.shadowColor='rgba(0,0,0,.8)'; ctx.shadowBlur=4;
+  ctx.textAlign='left'; ctx.font='600 12px ui-monospace,Menlo,monospace';
   const y = Math.max(H*0.5-20, 150);
-  ctx.fillText(`${fps} FPS`, 12, y);
-  ctx.fillText(`cobras ${snakes.length} · comida ${foodCount}`, 12, y+16);
-  ctx.shadowBlur=0;
+  const lines = [`${fps} FPS · sim ${perf.sim.toFixed(1)}ms · desenho ${perf.draw.toFixed(1)}ms`,
+    `cobras ${snakes.length} · comida ${foodCount} · Q${QL} ×${RS.toFixed(2)}`];
+  lines.forEach((t,i) => { ctx.fillStyle='rgba(0,0,0,.7)'; ctx.fillText(t, 13, y+i*16+1); ctx.fillStyle='#9fffc0'; ctx.fillText(t, 12, y+i*16); });
 }
 function roundRect(x,y,w,h,r){
   ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
@@ -941,7 +975,7 @@ const ACTIONS = [
   }],
   ['Matar todos os bots', () => { for (const b of snakes.filter(x => !x.isPlayer)) kill(b, null, false); msg('Bots eliminados'); }],
   ['Reiniciar mundo', () => { resetWorld(); msg('Mundo reiniciado'); }],
-  ['Restaurar padrões', () => { for (const k in DEFAULTS) setCfg(k, DEFAULTS[k], true); resetWorld(); saveCfg(); msg('Padrões restaurados'); }],
+  ['Restaurar padrões', () => { for (const k in DEFAULTS) setCfg(k, DEFAULTS[k], true); resize(); resetWorld(); saveCfg(); msg('Padrões restaurados'); }],
 ];
 
 /* --- esquema dos controles --- */
@@ -982,6 +1016,7 @@ const SCHEMA = [
     { k:'timeScale',  l:'Velocidade do jogo (×)', min:0.1, max:3, step:0.05 },
   ]},
   { g:'🎥 Câmera e interface', items:[
+    { k:'quality',    l:'Qualidade gráfica', t:'select', opts:[['auto','Automática (recomendado)'],['high','Alta'],['medium','Média'],['low','Baixa (mais rápida)']] },
     { k:'zoom',       l:'Zoom (×)',               min:0.3, max:2.5, step:0.05 },
     { k:'autoZoom',   l:'Zoom automático ao crescer', t:'bool' },
     { k:'showNames',  l:'Nomes das cobras', t:'bool' },
@@ -997,7 +1032,7 @@ const decimals = st => (String(st).split('.')[1] || '').length;
 function setCfg(k, v, skipSave){
   CFG[k] = v;
   const c = controls[k];
-  if (c){ if (c.cb) c.cb.checked = !!v; else { c.rng.value = v; c.num.value = +(+v).toFixed(c.dec); } }
+  if (c){ if (c.cb) c.cb.checked = !!v; else if (c.sel) c.sel.value = v; else { c.rng.value = v; c.num.value = +(+v).toFixed(c.dec); } }
   if (!skipSave) saveCfg();
 }
 function buildAdmin(){
@@ -1015,7 +1050,14 @@ function buildAdmin(){
     for (const it of grp.items){
       const row = document.createElement('div'); row.className = 'row' + (it.t==='bool' ? ' bool' : '');
       const lab = document.createElement('label'); lab.textContent = it.l; row.appendChild(lab);
-      if (it.t === 'bool'){
+      if (it.t === 'select'){
+        row.classList.add('bool');
+        const sel = document.createElement('select'); sel.className = 'btn';
+        for (const [v,t] of it.opts){ const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+        sel.value = CFG[it.k];
+        sel.addEventListener('change', () => { setCfg(it.k, sel.value); resize(); });
+        row.appendChild(sel); controls[it.k] = { sel };
+      } else if (it.t === 'bool'){
         const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'sw'; cb.checked = !!CFG[it.k];
         cb.addEventListener('change', () => setCfg(it.k, cb.checked));
         row.appendChild(cb); controls[it.k] = { cb };
@@ -1052,23 +1094,52 @@ if (leaderboard[0]){ cam.x = leaderboard[0].segs[0].x; cam.y = leaderboard[0].se
 
 let last = performance.now();
 let fps = 0, fpsFrames = 0, fpsAcc = 0;
+const perf = { sim:0, draw:0 };
+let qAcc = 0, qN = 0, qGood = 0, qCool = 0;
+function autoQuality(dt){
+  qAcc += dt; qN++;
+  if (qAcc < 1) return;
+  const avg = qAcc/qN, now = performance.now(); qAcc = 0; qN = 0;
+  if (avg > 0.024){                       // < ~42 FPS: reduz resolução e depois detalhes
+    qGood = 0;
+    if (now < qCool) return;
+    if (resScale > 0.7) resScale = Math.max(0.6, resScale-0.15);
+    else if (autoQ < 2) autoQ++;
+    else resScale = Math.max(0.5, resScale-0.1);
+    qCool = now + 2000; resize();
+  } else if (avg < 0.0185){               // folga: sobe qualidade devagar (10 s estáveis)
+    if (++qGood >= 10 && now > qCool){
+      qGood = 0; qCool = now + 2000;
+      if (resScale < 1) resScale = Math.min(1, resScale+0.1); else if (autoQ > 0) autoQ--;
+      resize();
+    }
+  } else qGood = 0;
+}
 function frame(now){
   requestAnimationFrame(frame);
   let dt = (now-last)/1000; last = now;
+  const raw = dt;
   if (!(dt>0)) dt = 0.016;
   if (dt > 0.1) dt = 0.1;
   fpsFrames++; fpsAcc += dt;
   if (fpsAcc >= 0.5){ fps = Math.round(fpsFrames/fpsAcc); fpsFrames = 0; fpsAcc = 0; }
+  const t0 = performance.now();
   if (!paused && !(adminOpen && CFG.pauseOnPanel)){
-    let rem = dt*60*CFG.timeScale;
-    while (rem > 0.0001){ const k = Math.min(rem,1); step(k); rem -= k; }
+    // passo máx. adaptado à velocidade (evita atravessar corpos); teto de ticks por frame evita espiral de lentidão
+    const kmax = clamp(11/(Math.max(CFG.speed, CFG.boostSpeed)*Math.max(1, CFG.botSpeed)), 0.4, 2);
+    let rem = Math.min(dt*60*CFG.timeScale, 6);
+    while (rem > 0.0001){ const k = Math.min(rem,kmax); step(k); rem -= k; }
   }
+  const t1 = performance.now();
   render(dt);
+  const t2 = performance.now();
+  perf.sim += ((t1-t0) - perf.sim)*0.1; perf.draw += ((t2-t1) - perf.draw)*0.1;
+  if (CFG.quality==='auto' && raw<0.1) autoQuality(raw);
 }
 requestAnimationFrame(frame);
 
 // para testes / depuração
-window.__game = { snakes, get player(){ return player; }, startGame, get state(){ return state; } };
+window.__game = { perf, CFG, snakes, get player(){ return player; }, startGame, get state(){ return state; } };
 })();
 </script>
 </body>
