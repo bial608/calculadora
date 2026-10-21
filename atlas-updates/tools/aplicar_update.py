@@ -94,8 +94,9 @@ def candidates() -> list[Path]:
         if is_atlas(p):
             out.append(p)
 
-    # the update folder was extracted inside / next to the install
-    for up in [HERE] + list(HERE.parents)[:3]:
+    # the update folder was extracted next to the install (siblings of it and
+    # of its parent only — never wider, so an unrelated copy is not picked up)
+    for up in list(HERE.parents)[:2]:
         add(up)
         try:
             for child in up.iterdir():
@@ -148,25 +149,44 @@ def ask_folder() -> Path | None:
         return None
 
 
+def confirm(p: Path, assume_yes: bool) -> Path | None:
+    if assume_yes:
+        return p
+    try:
+        ans = input(f"Atualizar esta pasta?  {p}\n[S/n]: ").strip().lower()
+    except EOFError:
+        return None
+    return p if ans in ("", "s", "sim", "y", "yes") else None
+
+
 def find_install(explicit: str | None, assume_yes: bool) -> Path | None:
     if explicit:
         p = Path(explicit).expanduser()
         return p if is_atlas(p) else None
+    # Strongest signal: the update folder sits INSIDE an install.
+    for up in HERE.parents:
+        if is_atlas(up):
+            return confirm(up, assume_yes)
     found = candidates()
-    if len(found) == 1 or (found and assume_yes):
-        return found[0]
+    if len(found) == 1:
+        return confirm(found[0], assume_yes)
+    if found and assume_yes:
+        say(R, "Há mais de uma instalação do ATLAS; diga qual com --alvo \"<pasta>\".")
+        for p in found:
+            print(f"  {p}")
+        return None
     if found:
         say(Y, "Encontrei mais de uma instalação do ATLAS:")
         for i, p in enumerate(found, 1):
             print(f"  {i}. {p}")
         try:
-            pick = input("Número da que deve ser atualizada [1]: ").strip() or "1"
-            return found[int(pick) - 1]
+            pick = input("Número da que deve ser atualizada (Enter = cancelar): ").strip()
+            return found[int(pick) - 1] if pick else None
         except Exception:
             return None
     say(Y, "Não achei a pasta do ATLAS automaticamente.")
     p = ask_folder()
-    return p if p and is_atlas(p) else None
+    return confirm(p, assume_yes) if p and is_atlas(p) else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,9 +208,22 @@ def apply(target: Path) -> bool:
             say(R, f"✖ arquivo do update corrompido: {item['path']} — baixe o update de novo")
             return False
 
+    todo = [i for i in files
+            if not (target / i["path"]).exists() or sha256(target / i["path"]) != i["sha256"]]
+    todo_del = [r for r in deletes if safe_rel(r) and not is_protected(r) and (target / r).exists()]
+    if not todo and not todo_del:
+        say(G, "\n✔ Esta instalação já está com este update. Nada foi alterado.")
+        return True
+
+    # A backup folder is never reused: re-running in the same second must not
+    # overwrite the copy of the ORIGINAL files with already-updated ones.
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     bdir = target / "_update_backups" / stamp
-    bdir.mkdir(parents=True, exist_ok=True)
+    n = 2
+    while bdir.exists():
+        bdir = target / "_update_backups" / f"{stamp}_{n}"
+        n += 1
+    bdir.mkdir(parents=True)
     record = {"version": man.get("version"), "applied_at": stamp,
               "replaced": [], "created": [], "deleted": []}
 
@@ -199,12 +232,12 @@ def apply(target: Path) -> bool:
         for item in files:
             rel = item["path"]
             dst = target / rel
+            if item not in todo:
+                print(f"  {D}= {rel} (já atualizado){X}")
+                continue
             if dst.exists():
                 (bdir / rel).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(dst, bdir / rel)
-                if sha256(dst) == item["sha256"]:
-                    print(f"  {D}= {rel} (já atualizado){X}")
-                    continue
                 record["replaced"].append(rel)
                 kind = "~"
             else:
@@ -290,7 +323,8 @@ def main() -> int:
 
     target = find_install(a.alvo, a.sim)
     if target is None:
-        say(R, "✖ Pasta do ATLAS não encontrada (precisa ter o main.py com AtlasLive).")
+        say(R, "✖ Nenhuma pasta do ATLAS escolhida (ela precisa ter o main.py do ATLAS). "
+               "Nada foi alterado.")
         return 2
     say(D, f"ATLAS em: {target}")
     ok = undo(target) if a.desfazer else apply(target)
