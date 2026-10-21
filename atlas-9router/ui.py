@@ -4541,7 +4541,8 @@ class DevConsole(QWidget):
                                                          evt.get("text", "")))
         elif k == "learn":
             # Obsidian Brain: green = learned, blue = what ATLAS did, red = about you
-            col = {"aprendi": _TERM_GREEN, "fiz": _TERM_BLUE, "voce": _TERM_RED}.get(
+            col = {"aprendi": _TERM_GREEN, "fiz": _TERM_BLUE, "voce": _TERM_RED,
+                   "pedido": _TERM_PURP, "autonomo": _TERM_AMBER}.get(
                 evt.get("tone"), C.TEXT)
             self._append_html(ts + c(col, "● " + str(evt.get("text", ""))))
         elif k == "decode":
@@ -4982,6 +4983,7 @@ class MainWindow(QMainWindow):
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
     _dev_sig        = pyqtSignal(object)     # 9Router / tool events → dev console
     _winstate_sig   = pyqtSignal(bool)       # True = minimise (task agent), False = restore
+    _mute_toggle_sig = pyqtSignal()          # global Ctrl+Shift+Alt+Space (any thread)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -5294,6 +5296,19 @@ class MainWindow(QMainWindow):
 
         sc_mute = QShortcut(QKeySequence("F4"), self)
         sc_mute.activated.connect(self._toggle_mute)
+        # Ctrl+Shift+Alt+Space mutes / unmutes from ANY window on Windows (a
+        # polling thread, like push-to-talk); elsewhere only while this window
+        # has focus. Never both at once, or one press would toggle twice.
+        self._mute_toggle_sig.connect(self._toggle_mute)
+        self._mute_hotkey = None
+        try:
+            from core.hotkey import GlobalToggle, qt_sequence, MUTE_CHORD
+            self._mute_hotkey = GlobalToggle(self._mute_toggle_sig.emit)
+            if self._mute_hotkey.start() != "global":
+                sc_mic = QShortcut(QKeySequence(qt_sequence(MUTE_CHORD)), self)
+                sc_mic.activated.connect(self._toggle_mute)
+        except Exception as e:
+            print(f"[UI] mute hotkey unavailable: {e}")
         sc_full = QShortcut(QKeySequence("F11"), self)
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
@@ -6956,7 +6971,7 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
-        lay.addWidget(_fl("[F4] Mute  ·  [F11] Fullscreen  ·  [F12] Dev Console  ·  [Ctrl+9] 9Router"))
+        lay.addWidget(_fl("[F4 / Ctrl+Shift+Alt+Space] Mic  ·  [F11] Fullscreen  ·  [F12] Dev Console  ·  [Ctrl+9] 9Router"))
         lay.addStretch()
         lay.addWidget(_fl("By FatihMakes", C.PRI_DIM))
         return w

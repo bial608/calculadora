@@ -1220,6 +1220,9 @@ class AtlasLive:
                 "the request. Ask a question only when an essential detail is "
                 "missing (e.g. the message text). If the user says stop/para/"
                 "cancela during a task, call executar_tarefa with action='stop'.\n"
+                "If executar_tarefa fails and the user wants to show you how, use "
+                "ensinar_tarefa: start it, relay each step they say, and finish to "
+                "save it so you can do it alone next time.\n"
             )
         if _relay_on:
             # Last on purpose: the most recent instruction is the one a model

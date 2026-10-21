@@ -793,29 +793,41 @@ you can help them better. Reply in Brazilian Portuguese with ONLY this JSON:
   "sobre_voce": ["0-2 observations about the USER as a person: habits, work
                  style, preferences, focus, difficulties — only if supported by
                  the screen"],
-  "ajuda": "one line: how you could help with what is on screen, or empty"}}
+  "ajuda": "one line: how you could help with what is on screen, or empty",
+  "autonomia": ["0-2 things you could LEARN to do for the user automatically next
+                time, so you need fewer requests — concrete, from what you see"]}}
 Never copy passwords, codes, card numbers, private message contents or other
 people's personal data — describe them generically ("conversa no WhatsApp")."""
 
 
-def _did_since(t0: float) -> list[str]:
-    """BLUE: what ATLAS did since the previous print, from core.activity."""
+def _activity_since(t0: float) -> tuple[list[str], list[str], list[str]]:
+    """Since the previous print, split ATLAS's activity into:
+       blue   — ambient things it did on its own
+       purple — things it did because YOU asked, and how
+       yellow — what it learned to be more autonomous (new/updated skills)
+    """
     try:
         from core import activity
         evts = activity.since(t0)
     except Exception:
-        return []
-    out = []
+        return [], [], []
+    blue, purple, yellow = [], [], []
     for e in evts:
         k, t = e.get("kind"), e.get("text", "")
-        if k == "tool":
-            out.append(f"Executei `{t[:90]}`")
-        elif k == "task" and not t.startswith("comecei"):
-            out.append(f"Tarefa — {t[:140]}")
+        if k == "task":
+            if not t.startswith("comecei"):
+                purple.append(f"A seu pedido — {t[:160]}")
+        elif k == "tool":
+            name = t.split("(", 1)[0]
+            if name in ("executar_tarefa", "ensinar_tarefa"):
+                continue          # these show in purple as a clean task line
+            blue.append(f"Executei `{t[:90]}`")
         elif k == "conversa":
-            out.append(f"Respondi: “{t[:90]}”")
-    # repeated lines (the same tool twice) once only, newest last
-    return list(dict.fromkeys(out))[-8:]
+            blue.append(f"Respondi sobre: “{t[:80]}”")
+        elif k == "skill":
+            yellow.append(t[:160])
+    dedup = lambda xs: list(dict.fromkeys(xs))[-8:]
+    return dedup(blue), dedup(purple), dedup(yellow)
 
 
 def _callout(kind: str, title: str, items: list[str]) -> str:
@@ -853,7 +865,9 @@ def _study_print(p: Path, when: datetime, title: str) -> bool:
     about = [str(x).strip() for x in (data.get("sobre_voce") or []) if str(x).strip()][:2]
     if data.get("ajuda"):
         learned.append(f"Posso ajudar: {str(data['ajuda']).strip()}")
-    did = _did_since(S.last_print_t)
+    autonomia = [str(x).strip() for x in (data.get("autonomia") or []) if str(x).strip()][:2]
+    blue, purple, yellow = _activity_since(S.last_print_t)
+    yellow = yellow + autonomia
     S.last_print_t = time.time()
 
     d = when.date()
@@ -861,21 +875,28 @@ def _study_print(p: Path, when: datetime, title: str) -> bool:
     if not f.exists():
         _write(f, f"---\nsource: atlas\ntype: atividade\ntags: [atlas, atividade]\n---\n"
                   f"# Atividade {d:%d/%m/%Y}\n\n"
-                  f"🟢 o que aprendi · 🔵 o que eu fiz · 🔴 o que percebi sobre você\n")
+                  f"🟢 aprendi · 🔵 o que eu fiz · 🔴 sobre você · "
+                  f"🟣 a seu pedido · 🟡 pra ser mais autônomo\n")
     app = str(data.get("app") or title or "").strip()[:60]
     entry = (f"\n## {when:%H:%M} · {app}\n"
              f"*Você estava:* {str(data.get('fazendo') or '').strip()}\n\n"
              + _callout("success", "🟢 Aprendi", learned) + "\n"
-             + _callout("info", "🔵 O que eu fiz", did or ["Nada desde o último print."]) + "\n"
-             + _callout("danger", "🔴 Sobre você", about or ["Nada novo."]))
+             + _callout("info", "🔵 O que eu fiz", blue or ["Nada desde o último print."]) + "\n"
+             + _callout("danger", "🔴 Sobre você", about or ["Nada novo."]) + "\n"
+             + _callout("question", "🟣 A seu pedido", purple or ["Nada."]) + "\n"
+             + _callout("warning", "🟡 Pra ser mais autônomo", yellow or ["Nada novo."]))
     _write(f, entry, append=True)
 
     for x in learned:
         _console("aprendi", x)
-    for x in did:
+    for x in blue:
         _console("fiz", x)
     for x in about:
         _console("voce", x)
+    for x in purple:
+        _console("pedido", x)
+    for x in yellow:
+        _console("autonomo", x)
 
     if cfg.get("delete_after_save", True):
         try:

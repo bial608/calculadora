@@ -52,6 +52,11 @@ _QT_NAME = {"ctrl": "Ctrl", "shift": "Shift", "alt": "Alt", "space": "Space",
             "f8": "F8", "f9": "F9", "f10": "F10",
             "capslock": "CapsLock", "insert": "Ins"}
 
+_MODIFIERS = ("ctrl", "shift", "alt")
+
+# Mute / unmute the microphone from anywhere.
+MUTE_CHORD = ("ctrl", "shift", "alt", "space")
+
 _POLL_HZ = 30.0
 # A key has to be down this long before we call it speech. It stops a stray
 # brush of the chord from opening the microphone.
@@ -149,13 +154,18 @@ class PushToTalk:
         import ctypes
         user32 = ctypes.windll.user32
         codes = [_VK[k] for k in self._chord]
+        # Modifiers that are NOT part of the chord must be up. Without this,
+        # Ctrl+Shift+Alt+Space (the mute toggle) also counts as Ctrl+Space and
+        # opens the microphone for push-to-talk at the same time.
+        extra = [_VK[m] for m in _MODIFIERS if m not in self._chord]
         period = 1.0 / _POLL_HZ
         down_since = 0.0
 
         while not self._stop.is_set():
             try:
                 # The high bit of the return value is "currently down".
-                down = all(user32.GetAsyncKeyState(c) & 0x8000 for c in codes)
+                down = (all(user32.GetAsyncKeyState(c) & 0x8000 for c in codes)
+                        and not any(user32.GetAsyncKeyState(c) & 0x8000 for c in extra))
             except Exception:
                 break     # driver or session teardown — fall back to windowed
             now = time.monotonic()
@@ -170,4 +180,75 @@ class PushToTalk:
             self._stop.wait(period)
 
         self._set_held(False)
+        self._scope = "window"
+
+
+class GlobalToggle:
+    """Calls `on_press()` ONCE each time the chord goes down — a toggle, not a
+    hold. Global on Windows (same polling as push-to-talk, no new package);
+    elsewhere `scope` is "window" and a Qt shortcut does the job instead.
+    Holding the keys does not repeat: the chord must be released first.
+    """
+
+    def __init__(self, on_press: Callable[[], None], chord=MUTE_CHORD):
+        self._on_press = on_press
+        self._chord = tuple(chord)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._scope = "window"
+
+    @property
+    def scope(self) -> str:
+        return self._scope
+
+    @property
+    def label(self) -> str:
+        return chord_label(self._chord)
+
+    def start(self) -> str:
+        self.stop()
+        self._stop.clear()
+        try:
+            if _OS == "Windows" and all(k in _VK for k in self._chord):
+                import ctypes
+                ctypes.windll.user32.GetAsyncKeyState  # noqa: B018
+                self._scope = "global"
+                self._thread = threading.Thread(target=self._loop, daemon=True,
+                                                name="mute-toggle")
+                self._thread.start()
+                return self._scope
+        except Exception:
+            pass
+        self._scope = "window"
+        return self._scope
+
+    def stop(self) -> None:
+        self._stop.set()
+        t, self._thread = self._thread, None
+        if t is not None and t.is_alive():
+            t.join(timeout=1.0)
+
+    def _loop(self) -> None:
+        import ctypes
+        user32 = ctypes.windll.user32
+        codes = [_VK[k] for k in self._chord]
+        armed, down_since = True, 0.0
+        while not self._stop.is_set():
+            try:
+                down = all(user32.GetAsyncKeyState(c) & 0x8000 for c in codes)
+            except Exception:
+                break
+            now = time.monotonic()
+            if down:
+                if down_since == 0.0:
+                    down_since = now
+                elif armed and now - down_since >= _DEBOUNCE_S:
+                    armed = False
+                    try:
+                        self._on_press()
+                    except Exception:
+                        pass
+            else:
+                down_since, armed = 0.0, True
+            self._stop.wait(1.0 / _POLL_HZ)
         self._scope = "window"
