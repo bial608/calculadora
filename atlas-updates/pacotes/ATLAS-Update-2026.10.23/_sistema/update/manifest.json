@@ -2,7 +2,7 @@
   "version": "2026.10.23",
   "title": "Painel Recursos, Ei ATLAS, modo rapido, barge-in",
   "base": "ec2427d",
-  "head": "28f4167",
+  "head": "e0d83b2",
   "files": [
     {
       "path": "LEIA-ME-9ROUTER.md",

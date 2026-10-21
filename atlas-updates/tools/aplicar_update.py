@@ -196,8 +196,19 @@ def apply(target: Path) -> bool:
     man = json.loads(MANIFEST.read_text(encoding="utf-8"))
     files = man.get("files") or []
     deletes = man.get("delete") or []
-    say(G, f"\n▶ Update {man.get('version')} → {target}")
+    target_ver = man.get("version")
+
+    # Which version is installed now? Read the marker this updater leaves behind.
+    installed_ver = "desconhecida (nunca atualizada)"
+    try:
+        v = json.loads((target / "VERSION_ATLAS.json").read_text(encoding="utf-8"))
+        installed_ver = v.get("version") or installed_ver
+    except Exception:
+        pass
+
+    say(G, f"\n▶ Update → {target}")
     print(f"  {man.get('title', '')}")
+    print(f"  Versão instalada: {D}{installed_ver}{X}   →   deste update: {D}{target_ver}{X}")
 
     for item in files:
         if not safe_rel(item["path"]) or is_protected(item["path"]):
@@ -208,11 +219,20 @@ def apply(target: Path) -> bool:
             say(R, f"✖ arquivo do update corrompido: {item['path']} — baixe o update de novo")
             return False
 
+    # Install ONLY what is missing: compare each file's content (SHA-256) with
+    # what is on disk, so a file already up to date — from an earlier update or
+    # this one run twice — is left alone. This is the real "only the missing
+    # ones" guarantee, independent of any version number.
     todo = [i for i in files
             if not (target / i["path"]).exists() or sha256(target / i["path"]) != i["sha256"]]
     todo_del = [r for r in deletes if safe_rel(r) and not is_protected(r) and (target / r).exists()]
+    already = len(files) - len(todo)
+    print(f"  {already} arquivo(s) já estavam em dia · {len(todo)} a aplicar"
+          + (f" · {len(todo_del)} a remover" if todo_del else ""))
     if not todo and not todo_del:
-        say(G, "\n✔ Esta instalação já está com este update. Nada foi alterado.")
+        say(G, f"\n✔ Já está tudo na versão {target_ver}. Nada a fazer.")
+        # Still stamp the version, in case the marker was missing.
+        _stamp_version(target, man, [])
         return True
 
     # A backup folder is never reused: re-running in the same second must not
@@ -269,16 +289,34 @@ def apply(target: Path) -> bool:
         return False
 
     (bdir / "backup.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
-    (target / "VERSION_ATLAS.json").write_text(json.dumps(
-        {"version": man.get("version"), "title": man.get("title"), "applied_at": stamp,
-         "files": [i["path"] for i in files]}, indent=2, ensure_ascii=False), encoding="utf-8")
+    _stamp_version(target, man, files, stamp)
     say(G, f"\n✔ Update aplicado: {len(record['created'])} novo(s), "
-           f"{len(record['replaced'])} atualizado(s).")
+           f"{len(record['replaced'])} atualizado(s). Agora na versão {man.get('version')}.")
     print(f"  Suas configurações e API keys não foram tocadas.")
     print(f"  Backup: {bdir}")
     if any(i["path"] == "requirements.txt" for i in files):
         say(Y, "  requirements.txt mudou: o INICIAR_ATLAS.bat vai instalar o que faltar na próxima vez.")
     return True
+
+
+def _stamp_version(target: Path, man: dict, files: list, stamp: str = "") -> None:
+    """Record the installed version (and a short history) so the next update can
+    report where this install is."""
+    vf = target / "VERSION_ATLAS.json"
+    hist = []
+    try:
+        hist = json.loads(vf.read_text(encoding="utf-8")).get("history") or []
+    except Exception:
+        pass
+    entry = {"version": man.get("version"), "applied_at": stamp or
+             datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}
+    if not hist or hist[-1].get("version") != man.get("version"):
+        hist.append(entry)
+    vf.write_text(json.dumps(
+        {"version": man.get("version"), "title": man.get("title"),
+         "applied_at": entry["applied_at"], "history": hist[-20:],
+         "files": [i["path"] for i in files]},
+        indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def latest_backup(target: Path) -> Path | None:
