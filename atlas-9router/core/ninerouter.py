@@ -222,7 +222,42 @@ stats = {
     "tokens_in": 0,
     "tokens_out": 0,
     "online": None,     # None = unknown, True/False after a ping
+    "cost_session": 0.0,   # estimated USD this run
+    "cost_day": 0.0,       # estimated USD today (persisted)
+    "latency_samples": {}, # model -> {"n": int, "ms_total": int}
 }
+
+# Rough price table, USD per 1M tokens (prompt, completion). A combo routes to
+# whichever provider, so this is an ESTIMATE for budgeting, not a bill. Matched
+# by substring on the returned model id; unknown models use "default".
+PRICE = {
+    "default":  (0.50, 1.50),
+    "haiku":    (0.80, 4.00),
+    "sonnet":   (3.00, 15.00),
+    "opus":     (15.0, 75.00),
+    "gpt-5":    (1.25, 10.00),
+    "gpt-4o":   (2.50, 10.00),
+    "mini":     (0.15, 0.60),
+    "flash":    (0.10, 0.40),
+    "gemini":   (0.30, 2.50),
+    "kimi":     (0.15, 2.50),
+    "deepseek": (0.30, 1.20),
+    "llama":    (0.10, 0.40),
+    "qwen":     (0.20, 0.80),
+}
+
+
+def _price_for(model: str) -> tuple[float, float]:
+    m = (model or "").lower()
+    for key, pr in PRICE.items():
+        if key != "default" and key in m:
+            return pr
+    return PRICE["default"]
+
+
+def _estimate_cost(model: str, tin: int, tout: int) -> float:
+    pin, pout = _price_for(model)
+    return (tin * pin + tout * pout) / 1_000_000.0
 
 
 # Plugins can feed every request and learn from every answer:
@@ -262,6 +297,74 @@ def add_listener(fn: Callable[[dict], None]) -> None:
 def emit(kind: str, **data) -> None:
     """Public: plugins write to the dev console through this."""
     _emit(kind, **data)
+
+
+# ── Cost: per-day total (persisted) + a one-shot budget alert ────────────────
+_budget_alerted = {"day": "", "fired": False}
+
+
+def _cost_file() -> Path:
+    p = BASE_DIR / "memory"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p / "cost.json"
+
+
+def _bump_day_cost(add: float) -> float:
+    today = time.strftime("%Y-%m-%d")
+    data = {}
+    try:
+        data = json.loads(_cost_file().read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    if data.get("day") != today:
+        data = {"day": today, "usd": 0.0}
+    data["usd"] = round(float(data.get("usd", 0.0)) + add, 6)
+    try:
+        _cost_file().write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+    return data["usd"]
+
+
+def budget() -> float:
+    """Daily budget in USD, 0 = off. Top-level 'daily_budget_usd' in api_keys.json."""
+    try:
+        return float(json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("daily_budget_usd") or 0)
+    except Exception:
+        return 0.0
+
+
+def _init_day_cost() -> None:
+    today = time.strftime("%Y-%m-%d")
+    try:
+        data = json.loads(_cost_file().read_text(encoding="utf-8"))
+        if data.get("day") == today:
+            stats["cost_day"] = float(data.get("usd", 0.0))
+    except Exception:
+        pass
+
+
+def _check_budget() -> None:
+    b = budget()
+    if b <= 0:
+        return
+    today = time.strftime("%Y-%m-%d")
+    if _budget_alerted["day"] != today:
+        _budget_alerted.update(day=today, fired=False)
+    if not _budget_alerted["fired"] and stats["cost_day"] >= 0.8 * b:
+        _budget_alerted["fired"] = True
+        _emit("info", text=f"⚠ gasto do dia em ${stats['cost_day']:.2f} de ${b:.2f} (80%)")
+
+
+def avg_latency(model: str = "") -> int:
+    ls = stats["latency_samples"]
+    if model and model in ls and ls[model]["n"]:
+        return ls[model]["ms_total"] // ls[model]["n"]
+    n = sum(v["n"] for v in ls.values())
+    return (sum(v["ms_total"] for v in ls.values()) // n) if n else 0
 
 
 def _emit(kind: str, **data) -> None:
@@ -518,9 +621,17 @@ def ask(request: str, raw_heard: str = "", images: Optional[list] = None,
     with _lock:
         stats["last_latency_ms"] = ms
         stats["last_model"] = data.get("model") or model
-        stats["tokens_in"] += int(usage.get("prompt_tokens") or 0)
-        stats["tokens_out"] += int(usage.get("completion_tokens") or 0)
+        tin = int(usage.get("prompt_tokens") or 0)
+        tout = int(usage.get("completion_tokens") or 0)
+        stats["tokens_in"] += tin
+        stats["tokens_out"] += tout
+        cost = _estimate_cost(stats["last_model"], tin, tout)
+        stats["cost_session"] += cost
+        stats["cost_day"] = _bump_day_cost(cost)
+        _ls = stats["latency_samples"].setdefault(stats["last_model"], {"n": 0, "ms_total": 0})
+        _ls["n"] += 1; _ls["ms_total"] += ms
         stats["online"] = True
+    _check_budget()
     _history.append((request.strip(), answer))
     _emit("response", id=rid, ms=ms, model=stats["last_model"], text=answer,
           usage=usage)
@@ -704,6 +815,11 @@ def ping(cfg: Optional[dict] = None) -> bool:
         except Exception:
             continue
     stats["online"] = ok
+    try:
+        from core import health
+        (health.ok if ok else health.fail)("9router", "" if ok else "sem resposta no endpoint")
+    except Exception:
+        pass
     return ok
 
 
@@ -740,3 +856,10 @@ def test(cfg: Optional[dict] = None) -> tuple[bool, str]:
                        f"Use DETECTAR para ver os {summary}.")
     kind = "combo" if is_combo(model) else "modelo"
     return True, f"Conectado em {ms} ms · {kind} '{model}' OK · {summary}."
+
+
+# Load today's accumulated cost at import, so the status bar is right after a restart.
+try:
+    _init_day_cost()
+except Exception:
+    pass

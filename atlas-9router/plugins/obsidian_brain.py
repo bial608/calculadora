@@ -757,6 +757,12 @@ def _capture_once() -> str:
     cfg = _cfg()
     if S.screens_paused or not cfg.get("screenshots", True):
         return "paused"
+    try:
+        from memory.config_manager import get_features
+        if get_features().get("priv_prints_off"):
+            return "privado"
+    except Exception:
+        pass
     if not _ensure_vault():
         return "no-vault"
     title = _active_window_title()
@@ -1036,6 +1042,11 @@ def on_load(ctx: dict) -> None:
     def warm():
         S.index.refresh(force=True)
         _log(f"{len(S.index.entries)} notas indexadas")
+        try:
+            from core import health
+            health.ok("obsidian")
+        except Exception:
+            pass
         _cleanup_prints()
         _retry_leftovers()
         _finish_pending_sessions()

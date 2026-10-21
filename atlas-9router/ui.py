@@ -4335,6 +4335,16 @@ class DevStatusBar(QWidget):
         up = int(time.time() - self._t0)
         up_s = f"{up // 3600:02d}:{up % 3600 // 60:02d}:{up % 60:02d}"
         c = lambda col, t: f'<span style="color:{col}">{_html_esc(t)}</span>'
+        _killed = False
+        _cost_col = C.TEXT
+        try:
+            from core import ninerouter, guard
+            _killed = guard.is_killed()
+            b = ninerouter.budget()
+            if b > 0 and st.get("cost_day", 0.0) >= 0.8 * b:
+                _cost_col = _TERM_AMBER
+        except Exception:
+            pass
 
         if cfg.get("enabled"):
             if self._online is True:
@@ -4363,6 +4373,8 @@ class DevStatusBar(QWidget):
             + c(_TERM_DIM, " │ err ") + c(_TERM_RED if st.get("errors") else C.TEXT,
                                            st.get("errors", 0))
             + c(_TERM_DIM, " │ tok ") + c(C.TEXT, f"{st.get('tokens_in', 0)}/{st.get('tokens_out', 0)}")
+            + c(_TERM_DIM, " │ $") + c(_cost_col, f"{st.get('cost_day', 0.0):.2f}")
+            + (c(_TERM_RED, " ⛔KILL") if _killed else "")
             + c(_TERM_DIM, " │ up ") + c(C.TEXT, up_s)
             + c(_TERM_DIM, f" │ py{sys.version_info.major}.{sys.version_info.minor} pid {os.getpid()}"))
 
@@ -4605,6 +4617,10 @@ class DevConsole(QWidget):
                 "/textonly on|off   só texto (decodifica mídia) ou multimodal",
                 "/tarefa <objetivo> executa uma tarefa completa sozinho",
                 "/stop              para a tarefa em andamento (ou ESC)",
+                "/kill              liga/desliga o kill switch (Ctrl+Shift+Alt+K)",
+                "/health            saúde dos componentes",
+                "/audit             últimas ações registradas",
+                "/custo             gasto e latência da sessão",
                 "/clear             limpa o console",
                 "<texto livre>      envia ao assistente como comando digitado",
             ):
@@ -4653,6 +4669,28 @@ class DevConsole(QWidget):
             from actions import task_agent
             (ok_ if task_agent.stop() else info)("parando a tarefa…" if task_agent.busy()
                                                   else "nenhuma tarefa rodando")
+        elif name == "/kill":
+            from core import guard
+            if guard.is_killed():
+                guard.release(); ok_("kill switch LIBERADO")
+            else:
+                guard.kill("/kill no console"); bad("KILL SWITCH acionado — tudo parado")
+        elif name == "/health":
+            from core import health
+            for r in health.report():
+                (ok_ if r["status"] == "ok" else bad)(
+                    f"{r['name']}: {r['status']} {r['reason']} ({r['ago']}s)")
+            if not health.report():
+                info("nada registrado ainda")
+        elif name == "/audit":
+            from core import audit
+            for e in audit.recent(limit=20):
+                info(f"{e['ts'][11:19]} {e.get('kind',''):8} {str(e.get('text',''))[:90]}")
+        elif name == "/custo":
+            from core import ninerouter as _nr
+            st = _nr.stats; b = _nr.budget()
+            info(f"sessão ${st.get('cost_session',0):.3f} · hoje ${st.get('cost_day',0):.3f}"
+                 + (f" de ${b:.2f}" if b else "") + f" · latência média {_nr.avg_latency()}ms")
         elif name == "/textonly":
             on = arg.strip().lower() not in ("off", "0", "nao", "não")
             ninerouter.save_config({"text_only": on})
@@ -4762,6 +4800,34 @@ class FeaturesOverlay(_HudOverlay):
         head("👁  VISÃO (TELA E WEBCAM)")
         toggle("vision", "Deixar o ATLAS ver a tela e a câmera", self._feat.get("vision", True))
 
+        # ── Segurança ────────────────────────────────────────────────────────
+        head("🛡️  SEGURANÇA")
+        self._guard = dict(self._feat.get("guard") or {})
+        toggle("priv", "Modo privado: sem prints E sem ver a tela/câmera",
+               not self._feat.get("vision", True) and self._feat.get("priv_prints_off", False))
+        toggle("g_confirm_pay", "Pedir confirmação em pagamento/compra",
+               self._guard.get("confirm_payment", True))
+        toggle("g_confirm_send", "Pedir confirmação ao enviar algo a terceiros",
+               self._guard.get("confirm_send_others", True))
+        kr = QHBoxLayout()
+        krl = QLabel("Máx. ações que mexem no PC por hora:"); krl.setFont(_mono(7))
+        krl.setStyleSheet(f"color: {C.TEXT_DIM};"); kr.addWidget(krl)
+        self._rate = QLineEdit(str(self._guard.get("max_destructive_per_hour", 30)))
+        self._rate.setFont(_mono(8)); self._rate.setFixedWidth(60)
+        self._rate.setStyleSheet(f"QLineEdit {{ background:#000d08; color:{_TERM_GREEN}; "
+                                 f"border:1px solid #0f3d2a; border-radius:3px; padding:2px 6px; }}")
+        kr.addWidget(self._rate); kr.addStretch(); root.addLayout(kr)
+        br = QHBoxLayout()
+        brl = QLabel("Orçamento diário US$ (0 = sem limite):"); brl.setFont(_mono(7))
+        brl.setStyleSheet(f"color: {C.TEXT_DIM};"); br.addWidget(brl)
+        from core import ninerouter as _nr
+        self._budget = QLineEdit(str(_nr.budget() or ""))
+        self._budget.setFont(_mono(8)); self._budget.setFixedWidth(60)
+        self._budget.setStyleSheet(self._rate.styleSheet()); br.addWidget(self._budget)
+        br.addStretch(); root.addLayout(br)
+        kill = QLabel("Kill switch de emergência: Ctrl+Shift+Alt+K  ·  /kill no console")
+        kill.setFont(_mono(7)); kill.setStyleSheet(f"color: {_TERM_AMBER};"); root.addWidget(kill)
+
         self._status = QLabel(" "); self._status.setFont(_mono(7)); self._status.setWordWrap(True)
         self._status.setStyleSheet(f"color: {C.TEXT_DIM};"); root.addWidget(self._status)
 
@@ -4832,9 +4898,37 @@ class FeaturesOverlay(_HudOverlay):
 
     def _save(self):
         from memory import config_manager as cm
+        special = {"_wake_on", "priv", "g_confirm_pay", "g_confirm_send"}
         for key, b in self._toggles.items():
-            if key != "_wake_on":
+            if key not in special:
                 cm.save_feature(key, b.isChecked())
+        # Modo privado: sem prints e sem ver a tela/câmera, num botão só.
+        priv = self._toggles["priv"].isChecked()
+        if priv:
+            cm.save_feature("vision", False)
+            cm.save_feature("priv_prints_off", True)
+        else:
+            cm.save_feature("priv_prints_off", False)
+        # Política do guard.
+        guard = dict(self._guard)
+        guard["confirm_payment"] = self._toggles["g_confirm_pay"].isChecked()
+        guard["confirm_send_others"] = self._toggles["g_confirm_send"].isChecked()
+        try:
+            guard["max_destructive_per_hour"] = max(1, int(self._rate.text().strip() or 30))
+        except ValueError:
+            guard["max_destructive_per_hour"] = 30
+        cm.save_feature("guard", guard)
+        try:
+            from core import guard as _g
+            _g.configure(guard)
+        except Exception:
+            pass
+        # Orçamento diário (chave de topo).
+        try:
+            b = float(self._budget.text().strip().replace(",", ".") or 0)
+        except ValueError:
+            b = 0.0
+        cm._patch_config(daily_budget_usd=b)
         wk = dict(self._wk)
         wk["engine"] = self._engine.currentData()
         wk["phrase"] = self._pv_phrase.text().strip() or "Ei ATLAS"
@@ -5164,6 +5258,7 @@ class MainWindow(QMainWindow):
     _dev_sig        = pyqtSignal(object)     # 9Router / tool events → dev console
     _winstate_sig   = pyqtSignal(bool)       # True = minimise (task agent), False = restore
     _mute_toggle_sig = pyqtSignal()          # global Ctrl+Shift+Alt+Space (any thread)
+    _kill_sig        = pyqtSignal()          # global Ctrl+Shift+Alt+K kill switch
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -5497,6 +5592,18 @@ class MainWindow(QMainWindow):
         sc_dev.activated.connect(self._toggle_dev_console)
         sc_9r = QShortcut(QKeySequence("Ctrl+9"), self)
         sc_9r.activated.connect(self._open_ninerouter)
+        # Kill switch: stops the agent and blocks risky actions until released.
+        sc_kill = QShortcut(QKeySequence("Ctrl+Shift+Alt+K"), self)
+        sc_kill.activated.connect(self._toggle_kill)
+        self._kill_hotkey = None
+        try:
+            from core.hotkey import GlobalToggle
+            self._kill_hotkey = GlobalToggle(lambda: self._kill_sig.emit(),
+                                             chord=("ctrl", "shift", "alt", "k"))
+            self._kill_hotkey.start()
+        except Exception as e:
+            print(f"[UI] kill hotkey unavailable: {e}")
+        self._kill_sig.connect(self._toggle_kill)
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -7708,6 +7815,21 @@ class MainWindow(QMainWindow):
             self.on_audio_device_change()
 
     # ── Dev layer: console + 9Router ─────────────────────────────────────────
+
+    def _toggle_kill(self):
+        """Kill switch: on → stop the agent and block risky actions; again → release."""
+        try:
+            from core import guard
+        except Exception:
+            return
+        if guard.is_killed():
+            guard.release()
+            self._log.append_log("SYS: 🟢 Kill switch LIBERADO — ações liberadas.")
+        else:
+            guard.kill("atalho/kill switch")
+            self._log.append_log("SYS: ⛔ KILL SWITCH — parei tudo. Aperte de novo (ou "
+                                 "/kill no console) para liberar.")
+        self._dev_bar._tick()
 
     def _set_minimised(self, on: bool):
         """The task agent needs the screen to itself while it works."""

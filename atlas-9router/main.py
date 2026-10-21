@@ -699,6 +699,14 @@ class AtlasLive:
             _ta.set_player(self.ui)
         except Exception as e:
             print(f"[ATLAS] task agent unavailable: {e}")
+        # Safety & observability spine: durable audit log + guard policy.
+        try:
+            from core import audit, guard, health
+            audit.start()
+            guard.configure(get_features().get("guard") or {})
+            health.ok("core")
+        except Exception as e:
+            print(f"[ATLAS] spine unavailable: {e}")
         # Plugin lifecycle: on_load now; on_turn per exchange; on_shutdown on exit.
         self._pending_user_turn = ""
         self._plugin_registry.start({

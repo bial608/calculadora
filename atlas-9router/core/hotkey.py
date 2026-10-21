@@ -45,6 +45,7 @@ _VK = {
     "ctrl": 0x11, "shift": 0x10, "alt": 0x12,
     "space": 0x20, "f8": 0x77, "f9": 0x78, "f10": 0x79,
     "capslock": 0x14, "insert": 0x2D,
+    "k": 0x4B,
 }
 
 # Qt key sequence text for the same chord, used by the windowed fallback.

@@ -787,6 +787,13 @@ def executar_tarefa(parameters: dict, player=None) -> str:
     goal = str(parameters.get("goal") or "").strip()
     if not goal:
         return outcome.failed("executar_tarefa", "no goal was given")
+    try:
+        from core import guard
+        if guard.is_killed():
+            return ("O kill switch está acionado — não executo tarefas até você liberar "
+                    "(painel Recursos ou o atalho de emergência).")
+    except Exception:
+        pass
     # Claim the slot HERE, before the thread exists, so two quick requests can
     # never start two agents fighting over the same mouse.
     if not _run_lock.acquire(blocking=False):

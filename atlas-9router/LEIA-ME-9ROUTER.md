@@ -247,3 +247,31 @@ Um lugar para ligar/desligar cada recurso, com pequenas configurações:
   nem recebe as ferramentas de visão e sabe que não pode ver).
 
 Mudanças em visão, barge-in e palavra de ativação valem ao salvar (ele reconecta).
+
+## Segurança e observabilidade (a "espinha")
+
+- **Kill switch** — `Ctrl+Shift+Alt+K` (ou `/kill`): para o agente na hora e
+  bloqueia qualquer ação que mexa no sistema até você liberar (aperta de novo).
+  Aparece `⛔KILL` na barra de status.
+- **Guard** — limite de ações que mexem no PC por hora, e confirmação obrigatória
+  em pagamento/compra, apagar muitos arquivos e enviar algo a terceiros. É uma
+  trava real, independente do modelo (o modelo não consegue se convencer a pular).
+- **Modo privado** — um botão desliga os prints **e** a visão da tela/câmera.
+- **Audit log** — tudo que o ATLAS faz é gravado em `memory/audit/<data>.jsonl`
+  e em `ATLAS/Auditoria/<data>.md` (timeline legível). `/audit` mostra as últimas.
+- **Custo e latência** — a barra de status mostra `$` gasto do dia (estimativa);
+  defina um orçamento diário no painel e ele avisa aos 80%. `/custo` detalha.
+- **Health check** — `/health` mostra a saúde de cada componente; um que quebra
+  não derruba os outros.
+
+Tudo no painel ⚙ → RECURSOS. Comandos no Dev Console (F12): `/kill`, `/health`,
+`/audit`, `/custo`.
+
+## Por que não fica lento com tantos recursos
+
+A regra do projeto: **o custo é o import pesado, não a existência da feature.**
+Cada ação é barata de carregar (só a descrição); as bibliotecas pesadas (visão,
+navegador, voz) só são importadas quando a feature roda de fato — e nunca para
+as que você não usa na sessão. Recursos desligados no painel nem viram ferramenta
+(não ocupam espaço no pedido ao modelo). Um teste automático (`core/capabilities`)
+falha se alguém puser um import pesado no topo de uma ação, para não regredir.
