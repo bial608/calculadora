@@ -38,11 +38,12 @@ def main():
 
     if out.exists():
         shutil.rmtree(out)
+    sysdir = out / "_sistema"          # machinery hidden here; root holds only .bat + README
     files = []
     for rel in sorted(changed):
         data = subprocess.run(["git", "-C", str(REPO), "show", f"HEAD:{APP}/{rel}"],
                               check=True, capture_output=True).stdout
-        dst = out / "update" / "files" / rel
+        dst = sysdir / "update" / "files" / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(data)
         files.append({"path": rel, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
@@ -50,10 +51,11 @@ def main():
     manifest = {"version": version, "title": title, "base": base,
                 "head": git("rev-parse", "--short", "HEAD").strip(),
                 "files": files, "delete": sorted(deleted)}
-    (out / "update").mkdir(parents=True, exist_ok=True)
-    (out / "update" / "manifest.json").write_text(
+    (sysdir / "update").mkdir(parents=True, exist_ok=True)
+    (sysdir / "update" / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    for name in ("aplicar_update.py", "fazer_update.bat", "desfazer_update.bat"):
+    shutil.copy2(TOOLS / "aplicar_update.py", sysdir / "aplicar_update.py")
+    for name in ("fazer_update.bat", "desfazer_update.bat"):
         shutil.copy2(TOOLS / name, out / name)
     notes = TOOLS.parent / "notas" / f"{version}.md"
     if notes.exists():

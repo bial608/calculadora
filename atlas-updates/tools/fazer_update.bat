@@ -16,23 +16,17 @@ pause
 
 set "PY="
 for %%V in (3.12 3.11 3.13) do (
-    if not defined PY (
-        py -%%V -c "import sys" >nul 2>&1 && set "PY=py -%%V"
-    )
+    if not defined PY ( py -%%V -c "import sys" >nul 2>&1 && set "PY=py -%%V" )
 )
+if not defined PY ( py -3 -c "import sys" >nul 2>&1 && set "PY=py -3" )
+if not defined PY ( python -c "import sys" >nul 2>&1 && set "PY=python" )
 if not defined PY (
-    py -3 -c "import sys" >nul 2>&1 && set "PY=py -3"
-)
-if not defined PY (
-    python -c "import sys" >nul 2>&1 && set "PY=python"
-)
-if not defined PY (
-    echo [ERRO] Python nao encontrado.
+    echo [ERRO] Python nao encontrado. Instale em https://www.python.org/downloads/
     pause
     exit /b 1
 )
 
-%PY% aplicar_update.py %*
+%PY% "%~dp0_sistema\aplicar_update.py" %*
 if errorlevel 1 (
     echo.
     echo [ERRO] O update nao foi aplicado. Nada foi alterado.
