@@ -305,6 +305,43 @@ def _patch_config(**fields) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
+# ── Feature flags & small settings (the "Recursos" panel) ─────────────────────
+# One place for the on/off switches and their little options. Stored under
+# "features" in api_keys.json so a new toggle is one call and never collides
+# with an existing key. Unknown keys read as their supplied default.
+FEATURE_DEFAULTS = {
+    "background_alerts": True,     # master switch for all unprompted background speech
+    "alert_hardware": True,        # CPU/RAM/GPU/disk/temperature warnings
+    "alert_topics": True,          # watched-topic headlines
+    "alert_proactive": True,       # time/context-aware check-ins
+    "barge_in": True,              # let the user interrupt by voice and resume
+    "fast_mode": False,            # task agent does several UI steps per look
+    "vision": True,                # screen + webcam vision tool offered
+}
+
+
+def get_features() -> dict:
+    data = load_api_keys().get("features")
+    out = dict(FEATURE_DEFAULTS)
+    if isinstance(data, dict):
+        out.update({k: v for k, v in data.items()})
+    return out
+
+
+def get_feature(key: str, default=None):
+    val = get_features().get(key, default if default is not None else FEATURE_DEFAULTS.get(key))
+    return val
+
+
+def save_feature(key: str, value) -> None:
+    feats = {}
+    cur = load_api_keys().get("features")
+    if isinstance(cur, dict):
+        feats = dict(cur)
+    feats[key] = value
+    _patch_config(features=feats)
+
+
 def get_input_device() -> str:
     """Microphone device name, or '' for the system default."""
     return (load_api_keys().get("input_device", "") or "").strip()

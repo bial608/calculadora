@@ -75,6 +75,7 @@ from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
+    get_features,
 )
 from core                     import gemini as _gemini
 from core                     import ninerouter
@@ -169,6 +170,8 @@ _TAIL_MARGIN = 0.25
 # for a slow tool call (those send their own traffic, which clears the deadline)
 # while turning an unbounded hang into a blip.
 _STALL_LIMIT = 30.0
+# How many consecutive blocks of real user speech (not our echo) cut ATLAS off.
+_BARGE_BLOCKS = 3
 
 _VIS_WIN = 1024        # ~43 ms analysis window at 24 kHz: enough for formants
 _VIS_HOP = 480         # 20 ms between frames, i.e. 50 shapes a second
@@ -615,6 +618,8 @@ class AtlasLive:
         self._ptt                  = None    # core.hotkey.PushToTalk
         self._out_level            = 0.0     # level of the audio being played right now
         self._echo                 = EchoGuard()
+        self._barge_in             = True     # refreshed from the Recursos panel
+        self._barge_blocks         = 0
         # `stream.write()` returns when the buffer accepts the audio, not when the
         # speaker has finished with it, so sound is still in the room after the
         # speaking flag drops. Streaming the microphone during that gap is how an
@@ -1190,6 +1195,15 @@ class AtlasLive:
                           if (d.get("name") if isinstance(d, dict)
                               else getattr(d, "name", "")) != "ask_9router"]
 
+        # Vision off (Recursos panel) → the eyes tools are not offered, and
+        # _describe_limits below will tell the model it cannot see.
+        self._barge_in = bool(get_features().get("barge_in", True))
+        if not get_features().get("vision", True):
+            _blocked_vision = {"screen_process", "close_camera"}
+            _all_decls = [d for d in _all_decls
+                          if (d.get("name") if isinstance(d, dict)
+                              else getattr(d, "name", "")) not in _blocked_vision]
+
         _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
@@ -1579,15 +1593,30 @@ class AtlasLive:
             # the echo of what we are playing right now", sustained long enough
             # that a cough or a keystroke cannot trigger it.
             if atlas_speaking:
-                # Nothing is streamed while ATLAS talks.
-                #
-                # Interrupting by voice used to live here: `EchoGuard` can pick a
-                # user out from under our own echo, and `core/echo.py` still does
-                # that for the tail below. Re-enabling is small — classify each
-                # block here and call interrupt() after `required_blocks` of
-                # agreement — but it depends on the listener's room, so it stays
-                # out until it can be tried on real hardware.
-                return
+                # ── Barge-in (interromper falando) ───────────────────────────
+                # Off (Recursos panel) → nothing is streamed while ATLAS talks.
+                # On → EchoGuard separates the user's voice from ATLAS's own echo
+                # on the speakers; a few blocks of real user speech in a row cut
+                # the answer short, the way a person stops when interrupted. The
+                # conversation context is kept, so the user can add information
+                # and ATLAS carries on from there. A high block count keeps a
+                # cough or a keystroke from triggering it.
+                if not getattr(self, "_barge_in", True):
+                    return
+                try:
+                    if self._echo.is_user_speech(indata, SEND_SAMPLE_RATE, _pcm_level(indata)):
+                        self._barge_blocks += 1
+                    else:
+                        self._barge_blocks = 0
+                except Exception:
+                    self._barge_blocks = 0
+                    return
+                if self._barge_blocks < _BARGE_BLOCKS:
+                    return
+                self._barge_blocks = 0
+                print("[ATLAS] ✋ Barge-in — você me interrompeu.")
+                self.interrupt()
+                # fall through: this block starts the user's new turn.
 
             # ── Echo tail ────────────────────────────────────────────────────
             # The speaking flag has dropped but the speakers have not finished.
@@ -2157,6 +2186,9 @@ class AtlasLive:
         """Background task: voice alerts when metrics exceed thresholds."""
         while True:
             await asyncio.sleep(10)
+            _f = get_features()
+            if not (_f.get("background_alerts") and _f.get("alert_hardware")):
+                continue
             alert = await asyncio.to_thread(self._sys_monitor.check)
             if not alert or not self.session or not self._awake:
                 continue
@@ -2179,7 +2211,8 @@ class AtlasLive:
         """Check user-configured topics once per day; speak alerts when new headlines appear."""
         await asyncio.sleep(300)          # wait 5 min after startup before first check
         while True:
-            if self.session and self._awake:
+            _f = get_features()
+            if self.session and self._awake and _f.get("background_alerts") and _f.get("alert_topics"):
                 # Don't interrupt if user spoke recently or ATLAS is mid-sentence
                 with self._speaking_lock:
                     speaking = self._is_speaking
@@ -2218,6 +2251,9 @@ class AtlasLive:
             await asyncio.sleep(60)   # evaluate once per minute
 
             if not self.session or not self._awake:
+                continue
+            _f = get_features()
+            if not (_f.get("background_alerts") and _f.get("alert_proactive")):
                 continue
 
             with self._speaking_lock:

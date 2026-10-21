@@ -402,8 +402,14 @@ Reply with ONLY this JSON:
              "target": "what you click", "text": "...", "enter": false,
              "keys": ["ctrl","f"], "key": "enter", "times": 1,
              "direction": "down", "amount": 5, "seconds": 1.5}},
+  "actions": "OPTIONAL: in fast mode, a list of 2-4 actions you are SURE to do in a row on THIS screen to save time. Only the FIRST may be a click; the rest must be keyboard/type/press/hotkey/wait. Leave empty when unsure — ATLAS will look again.",
   "why": "short reason",
   "summary": "only for done/failed/needs_user: one or two sentences to the user, in Brazilian Portuguese"}}"""
+
+# In fast mode only the first action in a batch may move the mouse; everything
+# after it must be blind-safe (keyboard), because the screen has changed and we
+# have not looked again.
+_BATCH_SAFE = {"type", "type_enter", "hotkey", "press", "wait"}
 
 
 def _llm_text(prompt: str) -> str:
@@ -541,7 +547,18 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
             return status, summary
 
         action = d.get("action") or {}
-        sig = json.dumps(action, sort_keys=True) + "|" + fp
+        # Fast mode: run a short batch the model is sure of before looking again.
+        batch = [action]
+        if cfg.get("fast_mode") and isinstance(d.get("actions"), list) and d["actions"]:
+            cand = [a for a in d["actions"] if isinstance(a, dict) and a.get("type")]
+            if cand:
+                batch = [cand[0]]
+                for a in cand[1:4]:
+                    if str(a.get("type")).lower() in _BATCH_SAFE:
+                        batch.append(a)
+                    else:
+                        break
+        sig = json.dumps(batch, sort_keys=True) + "|" + fp
         stuck = stuck + 1 if sig == last_sig else 0
         last_sig = sig
         if stuck >= 1:
@@ -556,14 +573,20 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
             last_sig, stuck = "", 0
             continue
 
-        result = _execute(action)
-        done.append(action)
-        line = (f"{step}. [{d.get('plan_step', '?')}] {action.get('type')} "
+        results = []
+        for act in batch:
+            if _stop.is_set():
+                break
+            results.append(_execute(act))
+            done.append(act)
+            activity.record("agent_step",
+                            f"{act.get('type')}: {act.get('target') or act.get('name') or ''}".strip(": "))
+        tag = f"{len(batch)}x " if len(batch) > 1 else ""
+        line = (f"{step}. [{d.get('plan_step', '?')}] {tag}{action.get('type')} "
                 f"{action.get('target') or action.get('name') or action.get('text') or action.get('keys') or ''}"
-                f" → {result} · tela: {screen}")
+                f" → {results[-1] if results else '—'} · tela: {screen}")
         history.append(line)
         _emit(line)
-        activity.record("agent_step", f"{action.get('type')}: {action.get('target') or action.get('name') or ''}".strip(": "))
     return "failed", f"Cheguei ao limite de {max_steps} passos sem concluir."
 
 

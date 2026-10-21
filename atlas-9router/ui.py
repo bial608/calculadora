@@ -4669,6 +4669,186 @@ class DevConsole(QWidget):
             bad(f"comando desconhecido: {name} (veja /help)")
 
 
+class FeaturesOverlay(_HudOverlay):
+    """⚙ RECURSOS — on/off switches and small settings for the big features.
+
+    Writes to config (features + the wake block) and emits `changed` with the
+    collected values so MainWindow can apply them (restart the wake detector,
+    rebuild the session so vision / barge-in / fast mode take effect)."""
+
+    changed = pyqtSignal(object)
+    _OW = 520
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from memory import config_manager as cm
+        from core import wake_word
+        self._feat = cm.get_features()
+        self._wake_on = cm.get_wake_word_enabled()
+        self._wk = wake_word._wake_cfg()
+        self._porcupine_ok = wake_word.porcupine_available()
+
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            FeaturesOverlay {{ background: rgba(0, 8, 5, 249);
+                border: 1px solid {_TERM_GREEN}; border-radius: 6px; }}
+            QLabel {{ background: transparent; }}
+        """)
+        self.setFixedWidth(self._OW)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 14, 20, 14)
+        root.setSpacing(5)
+
+        hdr = QLabel("⚙  RECURSOS")
+        hdr.setFont(_mono(11, True)); hdr.setStyleSheet(f"color: {_TERM_GREEN};")
+        root.addWidget(hdr)
+        sub = QLabel("Ligue ou desligue cada recurso. Mudanças de visão, barge-in e "
+                     "palavra de ativação valem ao salvar.")
+        sub.setFont(_mono(7)); sub.setWordWrap(True); sub.setStyleSheet(f"color: {C.TEXT_DIM};")
+        root.addWidget(sub)
+
+        self._toggles: dict[str, QPushButton] = {}
+
+        def toggle(key: str, label: str, on: bool, indent: int = 0) -> QPushButton:
+            b = QPushButton()
+            b.setCheckable(True); b.setChecked(bool(on))
+            b.setFont(_mono(8, True)); b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(26)
+            b._label = label
+            b.toggled.connect(lambda _c, bb=b: self._style(bb))
+            self._style(b)
+            row = QHBoxLayout(); row.setContentsMargins(indent, 0, 0, 0)
+            row.addWidget(b)
+            root.addLayout(row)
+            if key:
+                self._toggles[key] = b
+            return b
+
+        def head(t: str):
+            l = QLabel(t); l.setFont(_mono(8, True)); l.setStyleSheet(f"color: {C.TEXT_MED};")
+            l.setContentsMargins(0, 6, 0, 0); root.addWidget(l)
+
+        # ── Wake word ────────────────────────────────────────────────────────
+        head("🎙  PALAVRA DE ATIVAÇÃO")
+        toggle("_wake_on", "Responder só quando eu chamar", self._wake_on)
+        self._engine = _ScrollSafeCombo()
+        self._engine.addItem("Hey Jarvis — pronto pra usar (openwakeword)", "openwakeword")
+        self._engine.addItem("Ei ATLAS — personalizada (Porcupine/Picovoice)", "porcupine")
+        self._engine.setCurrentIndex(1 if str(self._wk.get("engine", "")).lower() == "porcupine" else 0)
+        self._engine.setFont(_mono(8)); self._engine.setStyleSheet(self._combo_css())
+        self._engine.currentIndexChanged.connect(self._sync_porcupine)
+        root.addWidget(self._engine)
+        self._pbox = self._porcupine_fields()
+        root.addWidget(self._pbox)
+
+        # ── Barge-in ─────────────────────────────────────────────────────────
+        head("✋  INTERROMPER FALANDO")
+        toggle("barge_in", "Posso te cortar quando você falar por cima", self._feat.get("barge_in", True))
+
+        # ── Fast mode ────────────────────────────────────────────────────────
+        head("⚡  MODO RÁPIDO")
+        toggle("fast_mode", "Fazer vários passos por vez nas tarefas (mais rápido)",
+               self._feat.get("fast_mode", False))
+
+        # ── Background alerts ─────────────────────────────────────────────────
+        head("🔔  AVISOS EM BACKGROUND")
+        self._master = toggle("background_alerts", "Me avisar de coisas sem eu perguntar",
+                              self._feat.get("background_alerts", True))
+        toggle("alert_hardware", "• hardware (HD cheio, CPU, temperatura)", self._feat.get("alert_hardware", True), 18)
+        toggle("alert_topics", "• assuntos que eu peço pra acompanhar", self._feat.get("alert_topics", True), 18)
+        toggle("alert_proactive", "• lembretes pelo horário e contexto", self._feat.get("alert_proactive", True), 18)
+
+        # ── Vision ───────────────────────────────────────────────────────────
+        head("👁  VISÃO (TELA E WEBCAM)")
+        toggle("vision", "Deixar o ATLAS ver a tela e a câmera", self._feat.get("vision", True))
+
+        self._status = QLabel(" "); self._status.setFont(_mono(7)); self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color: {C.TEXT_DIM};"); root.addWidget(self._status)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton("CANCELAR"); cancel.setFont(_mono(8, True))
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor); cancel.setStyleSheet(self._btn_css())
+        cancel.clicked.connect(self.close); row.addWidget(cancel)
+        save = QPushButton("✔ SALVAR"); save.setFont(_mono(8, True))
+        save.setCursor(Qt.CursorShape.PointingHandCursor); save.setStyleSheet(self._btn_css())
+        save.clicked.connect(self._save); row.addWidget(save)
+        root.addLayout(row)
+        self._sync_porcupine()
+
+    def _combo_css(self) -> str:
+        return (f"QComboBox {{ background: #000d08; color: {_TERM_GREEN}; "
+                f"border: 1px solid #0f3d2a; border-radius: 3px; padding: 3px 6px; }}"
+                f"QComboBox QAbstractItemView {{ background: #000d08; color: {_TERM_GREEN}; "
+                f"selection-background-color: #0f3d2a; }}")
+
+    def _btn_css(self) -> str:
+        return (f"QPushButton {{ background: transparent; color: {_TERM_GREEN}; "
+                f"border: 1px solid #0f3d2a; border-radius: 3px; padding: 4px 10px; }}"
+                f"QPushButton:hover {{ border-color: {_TERM_GREEN}; background: #001a10; }}")
+
+    def _style(self, b: QPushButton):
+        on = b.isChecked()
+        b.setText(("● " if on else "○ ") + b._label)
+        if on:
+            b.setStyleSheet(f"QPushButton {{ text-align:left; background: #00331f; color: {_TERM_GREEN}; "
+                            f"border: 1px solid {_TERM_GREEN}; border-radius: 3px; padding: 2px 8px; }}")
+        else:
+            b.setStyleSheet(f"QPushButton {{ text-align:left; background: transparent; color: {C.TEXT_DIM}; "
+                            f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 2px 8px; }}")
+
+    def _porcupine_fields(self) -> QWidget:
+        box = QWidget()
+        v = QVBoxLayout(box); v.setContentsMargins(18, 2, 0, 2); v.setSpacing(3)
+        css = (f"QLineEdit {{ background: #000d08; color: {_TERM_GREEN}; "
+               f"border: 1px solid #0f3d2a; border-radius: 3px; padding: 3px 6px; }}")
+        def field(label, key, pw=False, ph=""):
+            l = QLabel(label); l.setFont(_mono(7)); l.setStyleSheet(f"color: {C.TEXT_DIM};"); v.addWidget(l)
+            e = QLineEdit(str(self._wk.get(key, ""))); e.setFont(_mono(8)); e.setStyleSheet(css)
+            if pw: e.setEchoMode(QLineEdit.EchoMode.Password)
+            if ph: e.setPlaceholderText(ph)
+            v.addWidget(e); return e
+        self._pv_phrase = field("Frase (ex.: Ei ATLAS)", "phrase", ph="Ei ATLAS")
+        self._pv_key = field("Picovoice access key (console.picovoice.ai)", "access_key", pw=True)
+        self._pv_ppn = field("Arquivo .ppn da frase (caminho)", "keyword_path",
+                             ph="C:\\...\\Ei-ATLAS_windows.ppn")
+        self._pv_sens = field("Sensibilidade 0.0–1.0", "sensitivity", ph="0.5")
+        if not self._wk.get("phrase"):
+            self._pv_phrase.setText("Ei ATLAS")
+        if not self._wk.get("sensitivity"):
+            self._pv_sens.setText("0.5")
+        return box
+
+    def _sync_porcupine(self, *a):
+        porc = self._engine.currentData() == "porcupine"
+        self._pbox.setVisible(porc)
+        if porc and not self._porcupine_ok:
+            self._status.setText("⚠ Instale o pacote: pip install pvporcupine — e crie a "
+                                 "frase 'Ei ATLAS' em console.picovoice.ai (arquivo .ppn).")
+            self._status.setStyleSheet(f"color: {_TERM_AMBER};")
+        else:
+            self._status.setText(" ")
+        self.adjustSize()
+
+    def _save(self):
+        from memory import config_manager as cm
+        for key, b in self._toggles.items():
+            if key != "_wake_on":
+                cm.save_feature(key, b.isChecked())
+        wk = dict(self._wk)
+        wk["engine"] = self._engine.currentData()
+        wk["phrase"] = self._pv_phrase.text().strip() or "Ei ATLAS"
+        wk["access_key"] = self._pv_key.text().strip()
+        wk["keyword_path"] = self._pv_ppn.text().strip()
+        try:
+            wk["sensitivity"] = float(self._pv_sens.text().strip().replace(",", ".") or 0.5)
+        except ValueError:
+            wk["sensitivity"] = 0.5
+        cm._patch_config(wake=wk)
+        self.changed.emit({"wake_on": self._toggles["_wake_on"].isChecked()})
+        self.close()
+
+
 class NineRouterOverlay(_HudOverlay):
     """Settings for the 9Router bridge: address, key, model, behaviour."""
 
@@ -6338,6 +6518,14 @@ class MainWindow(QMainWindow):
         nr_btn.clicked.connect(self._open_ninerouter)
         lay.addWidget(nr_btn)
 
+        feat_btn = QPushButton("⚙  RECURSOS  (ligar/desligar)")
+        feat_btn.setFixedHeight(26)
+        feat_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        feat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        feat_btn.setStyleSheet(_BTN_STYLE_PRI)
+        feat_btn.clicked.connect(self._open_features)
+        lay.addWidget(feat_btn)
+
         w.adjustSize()
         return w
 
@@ -7563,6 +7751,33 @@ class MainWindow(QMainWindow):
                                if on else "desligado — Gemini responde sozinho")
             + ". Reconectando.")
         self._dev_bar._ping()
+        if self.on_audio_device_change:
+            self.on_audio_device_change()
+
+    # ── Recursos (features) ──────────────────────────────────────────────────
+
+    def _open_features(self):
+        try:
+            ov = FeaturesOverlay(parent=self.centralWidget())
+        except Exception as e:
+            self._log.append_log(f"SYS: Painel de recursos indisponível: {e}")
+            return
+        ov.changed.connect(self._on_features_applied)
+        self._centre_overlay(ov)
+        self._features_overlay = ov
+
+    def _on_features_applied(self, result):
+        self._log.append_log("SYS: Recursos salvos.")
+        # Wake word on/off through the existing detector control.
+        try:
+            from memory.config_manager import get_wake_word_enabled
+            want = bool((result or {}).get("wake_on"))
+            if self.on_wake_toggle and want != get_wake_word_enabled():
+                self.on_wake_toggle(want)
+            self._refresh_wake_btns()
+        except Exception as e:
+            print(f"[UI] wake toggle on apply: {e}")
+        # Vision / barge-in are baked into the session at connect time → rebuild.
         if self.on_audio_device_change:
             self.on_audio_device_change()
 

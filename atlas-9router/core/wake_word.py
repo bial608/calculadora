@@ -32,6 +32,36 @@ DEFAULT_THRESHOLD = 0.5
 SAMPLE_RATE = 16000
 
 
+def _wake_cfg() -> dict:
+    """The "wake" block of config/api_keys.json. engine is 'openwakeword'
+    (default, phrase 'Hey Jarvis') or 'porcupine' (custom phrase like 'Ei ATLAS',
+    needs a Picovoice access key and a .ppn keyword file)."""
+    base = Path(__file__).resolve().parent.parent
+    import json
+    try:
+        data = json.loads((base / "config" / "api_keys.json").read_text(encoding="utf-8"))
+        w = data.get("wake") or {}
+        return w if isinstance(w, dict) else {}
+    except Exception:
+        return {}
+
+
+def porcupine_available() -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec("pvporcupine") is not None
+    except Exception:
+        return False
+
+
+def active_phrase() -> str:
+    """What the user actually says to wake ATLAS, for the UI and logs."""
+    w = _wake_cfg()
+    if str(w.get("engine", "")).lower() == "porcupine":
+        return (w.get("phrase") or "Ei ATLAS").strip()
+    return "Hey Jarvis"
+
+
 def is_installed() -> bool:
     """True if the openwakeword package is importable (no model check)."""
     try:
@@ -49,6 +79,11 @@ def is_ready() -> bool:
     with the detector's own Model when it's already running, which intermittently
     returned False and made the UI flicker to 'not downloaded'. Never raises.
     """
+    w = _wake_cfg()
+    if str(w.get("engine", "")).lower() == "porcupine":
+        return bool(porcupine_available()
+                    and str(w.get("access_key") or "").strip()
+                    and Path(str(w.get("keyword_path") or "")).is_file())
     if not is_installed():
         return False
     try:
@@ -128,26 +163,59 @@ class WakeWordDetector:
         self._running = False
         self._model = None
         self._ready = False
+        self._engine = "openwakeword"
+        self._porcupine = None
+        self._pv_buf = None
 
     def start(self) -> bool:
         """Load the model and spawn the inference thread. Returns True on success.
-        Safe to call again — a no-op if already running. Never raises."""
+        Safe to call again — a no-op if already running. Never raises. Picks the
+        engine from config: Porcupine when configured, else openwakeword."""
         if self._running:
             return True
-        try:
-            from openwakeword.model import Model
-            self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
-        except Exception as e:
-            self._logger(f"Wake word: could not load model — {e}")
-            self._notify("Wake word unavailable — use the WAKE NOW button.")
-            self._model = None
-            return False
+        self._engine = "openwakeword"
+        self._porcupine = None
+        w = _wake_cfg()
+        if str(w.get("engine", "")).lower() == "porcupine":
+            if self._start_porcupine(w):
+                self._engine = "porcupine"
+            else:
+                self._logger("Wake word: Porcupine indisponível — tentando openwakeword.")
+        if self._engine == "openwakeword":
+            try:
+                from openwakeword.model import Model
+                self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
+            except Exception as e:
+                self._logger(f"Wake word: could not load model — {e}")
+                self._notify("Wake word unavailable — use the WAKE NOW button.")
+                self._model = None
+                return False
         self._running = True
         self._ready = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="WakeWordThread")
         self._thread.start()
-        self._logger("Wake word: listening for 'Hey Jarvis'.")
+        self._logger(f"Wake word: listening for '{active_phrase()}'.")
         return True
+
+    def _start_porcupine(self, w: dict) -> bool:
+        """Create a Porcupine detector from a Picovoice access key + a custom
+        .ppn keyword file (made on the Picovoice console, e.g. 'Ei ATLAS')."""
+        key = str(w.get("access_key") or "").strip()
+        ppn = str(w.get("keyword_path") or "").strip()
+        if not key or not ppn or not Path(ppn).is_file():
+            self._logger("Wake word: Porcupine precisa de access key e do arquivo .ppn.")
+            return False
+        try:
+            import pvporcupine
+            sens = float(w.get("sensitivity") or 0.5)
+            self._porcupine = pvporcupine.create(
+                access_key=key, keyword_paths=[ppn], sensitivities=[sens])
+            self._pv_buf = __import__("numpy").zeros(0, dtype="int16")
+            return True
+        except Exception as e:
+            self._logger(f"Wake word: Porcupine falhou — {e}")
+            self._porcupine = None
+            return False
 
     def stop(self) -> None:
         self._running = False
@@ -158,6 +226,12 @@ class WakeWordDetector:
             pass
         self._model = None
         self._ready = False
+        if self._porcupine is not None:
+            try:
+                self._porcupine.delete()
+            except Exception:
+                pass
+            self._porcupine = None
 
     @property
     def ready(self) -> bool:
@@ -184,6 +258,25 @@ class WakeWordDetector:
                 frame = self._queue.get()
                 if frame is None or not self._running:
                     break
+
+                if self._engine == "porcupine" and self._porcupine is not None:
+                    # Porcupine needs exact frame_length chunks; buffer and feed.
+                    n = self._porcupine.frame_length
+                    self._pv_buf = np.concatenate([self._pv_buf, np.asarray(frame, dtype=np.int16)])
+                    fired = False
+                    while len(self._pv_buf) >= n:
+                        chunk, self._pv_buf = self._pv_buf[:n], self._pv_buf[n:]
+                        if self._porcupine.process(chunk) >= 0:
+                            fired = True
+                    if fired:
+                        self._drain()
+                        self._pv_buf = np.zeros(0, dtype="int16")
+                        try:
+                            self._on_detect()
+                        except Exception as e:
+                            self._logger(f"Wake word: on_detect error — {e}")
+                    continue
+
                 scores = self._model.predict(np.asarray(frame, dtype=np.int16))
                 score = 0.0
                 if isinstance(scores, dict):
