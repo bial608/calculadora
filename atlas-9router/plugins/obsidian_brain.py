@@ -15,10 +15,14 @@ WHAT IT DOES
        — or on the next start if it crashed — a summary is added on top:
        what was discussed, each problem and HOW it was solved, decisions and
        pending items, with [[links]] to the topic notes.
-    4. While ATLAS is open, a screenshot every N minutes (default 3) is saved
-       to ATLAS/Prints/<date>/. Every few prints (default 5 = 15 min) they are
-       described together in ONE Gemini call and logged to
-       ATLAS/Atividade/<date>.md. Once a day ATLAS/Perfil.md — routines, tools,
+    4. While ATLAS is open, a screenshot every N minutes (default 3). Each one
+       is studied by Gemini right away and written to ATLAS/Atividade/<date>.md
+       as three coloured Obsidian callouts:
+           🟢 green  [!success]  what ATLAS learned from that print
+           🔵 blue   [!info]     what ATLAS did since the previous print
+           🔴 red    [!danger]   what ATLAS concluded about you
+       Once that is saved the print itself is DELETED (a print whose analysis
+       failed is kept and retried later). Once a day ATLAS/Perfil.md — routines, tools,
        projects, preferences, how to help you — is rewritten from that log and
        the day's conversations, and its summary is part of every 9Router
        request so ATLAS gets to know you.
@@ -94,7 +98,7 @@ _DEFAULTS = {
     "screenshots": True,
     "interval_min": "3",
     "analyze_screens": True,
-    "batch_size": "5",
+    "delete_after_save": True,
     "retention_days": "14",
     "pause_keywords": ("senha, password, banco, bank, pix, cartão, card, "
                        "1password, bitwarden, keepass, lastpass, anônima, incognito, inprivate"),
@@ -145,9 +149,9 @@ PLUGIN_SETTINGS = {
         {"key": "interval_min", "label": "Intervalo dos prints (minutos)", "type": "text", "default": "3"},
         {"key": "analyze_screens", "label": "Descrever prints com o Gemini (estudar comportamento)",
          "type": "toggle", "default": True},
-        {"key": "batch_size", "label": "Prints por análise (5 = 1 chamada a cada 15 min)", "type": "text",
-         "default": "5"},
-        {"key": "retention_days", "label": "Apagar prints com mais de N dias", "type": "text",
+        {"key": "delete_after_save", "label": "Apagar o print depois de salvar o que aprendeu",
+         "type": "toggle", "default": True},
+        {"key": "retention_days", "label": "Apagar prints não analisados com mais de N dias", "type": "text",
          "default": "14"},
         {"key": "pause_keywords", "label": "Pausar prints se a janela ativa contiver (vírgulas)",
          "type": "text", "default": _DEFAULTS["pause_keywords"]},
@@ -373,7 +377,8 @@ class _State:
         self.stop = threading.Event()
         self.screens_paused = False
         self.screen_thread: threading.Thread | None = None
-        self.batch: list[tuple[str, Path]] = []
+        self.last_print_t = time.time()       # "what I did" counts from here
+        self.retries: dict[str, int] = {}     # print path -> failed analyses
         self.last_hash = ""
         self.last_match: dict = {}     # request -> best hit (for the answer hook)
 
@@ -625,6 +630,12 @@ def on_turn(user_text: str, reply_text: str) -> None:
         block += f"\n**[{t}] {_name()}:** {reply_text.strip()}\n"
     _write(S.session_file, block, append=True)
     S.turns += 1
+    if user_text:
+        try:
+            from core import activity
+            activity.record("conversa", user_text.strip())
+        except Exception:
+            pass
     # Gemini answering on its own (bridge off): topic notes come from here.
     try:
         from core import ninerouter
@@ -763,10 +774,8 @@ def _capture_once() -> str:
     p = S.vault / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(jpg)
-    S.batch.append((f"{now:%H:%M} · {title[:80]}", p))
-    if cfg.get("analyze_screens", True) and len(S.batch) >= _int(cfg.get("batch_size"), 5):
-        batch, S.batch = S.batch, []
-        _analyze(batch)
+    if cfg.get("analyze_screens", True):
+        _study_print(p, now, title)
     return "saved"
 
 
@@ -774,38 +783,125 @@ def _activity_file(d: date) -> Path:
     return S.vault / S.folder / "Atividade" / f"{d:%Y-%m-%d}.md"
 
 
-def _analyze(batch: list) -> None:
-    """One Gemini call describes a whole batch of prints."""
+_STUDY_PROMPT = """This is a screenshot of the user's computer taken at {time} (active window:
+"{title}"). You are {name}, their assistant, quietly studying how they work so
+you can help them better. Reply in Brazilian Portuguese with ONLY this JSON:
+{{"app": "main app/site on screen",
+  "fazendo": "one line: what the user is doing right now",
+  "aprendi": ["1-3 concrete things worth remembering: project, file, tool, topic,
+              problem/error on screen, what they searched — facts, not guesses"],
+  "sobre_voce": ["0-2 observations about the USER as a person: habits, work
+                 style, preferences, focus, difficulties — only if supported by
+                 the screen"],
+  "ajuda": "one line: how you could help with what is on screen, or empty"}}
+Never copy passwords, codes, card numbers, private message contents or other
+people's personal data — describe them generically ("conversa no WhatsApp")."""
+
+
+def _did_since(t0: float) -> list[str]:
+    """BLUE: what ATLAS did since the previous print, from core.activity."""
+    try:
+        from core import activity
+        evts = activity.since(t0)
+    except Exception:
+        return []
+    out = []
+    for e in evts:
+        k, t = e.get("kind"), e.get("text", "")
+        if k == "tool":
+            out.append(f"Executei `{t[:90]}`")
+        elif k == "task" and not t.startswith("comecei"):
+            out.append(f"Tarefa — {t[:140]}")
+        elif k == "conversa":
+            out.append(f"Respondi: “{t[:90]}”")
+    # repeated lines (the same tool twice) once only, newest last
+    return list(dict.fromkeys(out))[-8:]
+
+
+def _callout(kind: str, title: str, items: list[str]) -> str:
+    body = "\n".join(f"> - {i}" for i in items) if items else "> - —"
+    return f"> [!{kind}] {title}\n{body}\n"
+
+
+def _console(tone: str, text: str) -> None:
+    try:
+        from core import ninerouter
+        ninerouter.emit("learn", tone=tone, text=text)
+    except Exception:
+        pass
+
+
+def _study_print(p: Path, when: datetime, title: str) -> bool:
+    """Analyse ONE print, write the coloured entry, delete the print."""
     from google.genai import types
     from core import gemini
-    contents = []
-    for label, p in batch:
-        contents.append(f"PRINT {label}")
-        contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
-    contents.append(
-        "These are periodic screenshots of the user's computer, in order. Write in "
-        "Brazilian Portuguese, factual, no judgement:\n"
-        "- one bullet per print: '**HH:MM** — app/site · what they are doing · topic/project'\n"
-        "- then a line '**Foco:** ...' summarising the period (main task, switches, "
-        "interruptions)\n"
-        "- then '**Sinais:** ...' with anything useful to help them later (errors on "
-        "screen, things they searched, stuck points). Never transcribe passwords, card "
-        "numbers or private messages verbatim.")
+    cfg = _cfg()
     try:
-        resp = gemini.call(contents, tier=gemini.SMART, timeout_ms=90_000)
-        text = (getattr(resp, "text", None) or "").strip() if resp is not None else ""
+        data = gemini.as_json(
+            [types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"),
+             _STUDY_PROMPT.format(time=f"{when:%H:%M}", title=title[:120] or "?", name=_name())],
+            tier=gemini.SMART, timeout_ms=60_000)
     except Exception as e:
-        text = ""
-        _log(f"análise dos prints falhou: {e}")
-    d = date.today()
+        data = None
+        _log(f"análise do print falhou: {e}")
+    if not isinstance(data, dict) or not (data.get("fazendo") or data.get("aprendi")):
+        S.retries[str(p)] = S.retries.get(str(p), 0) + 1
+        _log(f"print {p.name} guardado para tentar de novo ({S.retries[str(p)]}x)")
+        return False
+
+    learned = [str(x).strip() for x in (data.get("aprendi") or []) if str(x).strip()][:3]
+    about = [str(x).strip() for x in (data.get("sobre_voce") or []) if str(x).strip()][:2]
+    if data.get("ajuda"):
+        learned.append(f"Posso ajudar: {str(data['ajuda']).strip()}")
+    did = _did_since(S.last_print_t)
+    S.last_print_t = time.time()
+
+    d = when.date()
     f = _activity_file(d)
     if not f.exists():
         _write(f, f"---\nsource: atlas\ntype: atividade\ntags: [atlas, atividade]\n---\n"
-                  f"# Atividade {d:%d/%m/%Y}\n")
-    first, last = batch[0][0][:5], batch[-1][0][:5]
-    thumbs = " ".join(f"![[{p.relative_to(S.vault).as_posix()}|160]]" for _, p in batch)
-    _write(f, f"\n## {first}–{last}\n{text or '_(sem análise)_'}\n\n{thumbs}\n", append=True)
-    _log(f"atividade {first}–{last} registrada")
+                  f"# Atividade {d:%d/%m/%Y}\n\n"
+                  f"🟢 o que aprendi · 🔵 o que eu fiz · 🔴 o que percebi sobre você\n")
+    app = str(data.get("app") or title or "").strip()[:60]
+    entry = (f"\n## {when:%H:%M} · {app}\n"
+             f"*Você estava:* {str(data.get('fazendo') or '').strip()}\n\n"
+             + _callout("success", "🟢 Aprendi", learned) + "\n"
+             + _callout("info", "🔵 O que eu fiz", did or ["Nada desde o último print."]) + "\n"
+             + _callout("danger", "🔴 Sobre você", about or ["Nada novo."]))
+    _write(f, entry, append=True)
+
+    for x in learned:
+        _console("aprendi", x)
+    for x in did:
+        _console("fiz", x)
+    for x in about:
+        _console("voce", x)
+
+    if cfg.get("delete_after_save", True):
+        try:
+            p.unlink()
+            S.retries.pop(str(p), None)
+            if p.parent.exists() and not any(p.parent.iterdir()):
+                p.parent.rmdir()
+        except Exception as e:
+            _log(f"não consegui apagar {p.name}: {e}")
+    _log(f"print {when:%H:%M} estudado e salvo")
+    return True
+
+
+def _retry_leftovers(limit: int = 5) -> None:
+    """Prints left from a crash, a closed app or a failed analysis."""
+    base = _base()
+    if not base or not _cfg().get("analyze_screens", True):
+        return
+    for p in sorted((base / "Prints").rglob("*.jpg"))[:limit]:
+        if S.retries.get(str(p), 0) >= 3:
+            continue
+        try:
+            when = datetime.strptime(f"{p.parent.name} {p.stem}", "%Y-%m-%d %H-%M-%S")
+        except ValueError:
+            continue
+        _study_print(p, when, "")
 
 
 _PROFILE_PROMPT = """You maintain a profile of the user so their assistant {name} can help them
@@ -845,7 +941,10 @@ def _update_profile(day: date) -> None:
     evidence = []
     act = _activity_file(day)
     if act.exists():
-        evidence.append(re.sub(r"!\[\[[^\]]+\]\]", "", act.read_text(encoding="utf-8")))
+        # green + red lines are the evidence; blue (what ATLAS did) is noise here
+        txt = act.read_text(encoding="utf-8")
+        txt = re.sub(r"> \[!info\][^\n]*\n(?:> [^\n]*\n)*", "", txt)
+        evidence.append(txt)
     for c in sorted((base / "Conversas").glob(f"{day:%Y-%m-%d}*.md")):
         m = re.search(r"## Resumo.*?(?=## Transcrição|\Z)", c.read_text(encoding="utf-8"), flags=re.S)
         if m:
@@ -890,6 +989,7 @@ def _screen_loop() -> None:
             break
         try:
             _capture_once()
+            _retry_leftovers(limit=2)
         except Exception as e:
             _log(f"print falhou: {e}")
         if date.today() != day:          # midnight: close yesterday
@@ -916,6 +1016,7 @@ def on_load(ctx: dict) -> None:
         S.index.refresh(force=True)
         _log(f"{len(S.index.entries)} notas indexadas")
         _cleanup_prints()
+        _retry_leftovers()
         _finish_pending_sessions()
         _update_profile(date.today() - timedelta(days=1))
     threading.Thread(target=warm, daemon=True, name="obsidian-warm").start()
@@ -928,12 +1029,6 @@ def on_load(ctx: dict) -> None:
 
 def on_shutdown() -> None:
     S.stop.set()
-    if S.batch and _cfg().get("analyze_screens", True):
-        batch, S.batch = S.batch, []
-        try:
-            _analyze(batch)
-        except Exception:
-            pass
     if S.session_file:
         _summarize(S.session_file)
     _update_profile(date.today())

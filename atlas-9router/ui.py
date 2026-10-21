@@ -4534,6 +4534,16 @@ class DevConsole(QWidget):
         elif k == "error":
             self._append_html(ts + c(_TERM_RED, f"✖ ERR #{evt.get('id', '-')} "
                                      f"{evt.get('ms', '')}ms {evt.get('text', '')}"))
+        elif k == "agent":
+            col = {"error": _TERM_RED, "warn": _TERM_AMBER, "ok": _TERM_GREEN}.get(
+                evt.get("level"), _TERM_BLUE)
+            self._append_html(ts + c(col, "⚙ agent ") + c(col if col != _TERM_BLUE else C.TEXT,
+                                                         evt.get("text", "")))
+        elif k == "learn":
+            # Obsidian Brain: green = learned, blue = what ATLAS did, red = about you
+            col = {"aprendi": _TERM_GREEN, "fiz": _TERM_BLUE, "voce": _TERM_RED}.get(
+                evt.get("tone"), C.TEXT)
+            self._append_html(ts + c(col, "● " + str(evt.get("text", ""))))
         elif k == "decode":
             if evt.get("ms") is None:
                 self._append_html(ts + c(_TERM_BLUE, "⇄ " + str(evt.get("text", ""))))
@@ -4592,6 +4602,8 @@ class DevConsole(QWidget):
                 "/config            mostra a configuração atual",
                 "/history clear     limpa o histórico enviado ao 9Router",
                 "/textonly on|off   só texto (decodifica mídia) ou multimodal",
+                "/tarefa <objetivo> executa uma tarefa completa sozinho",
+                "/stop              para a tarefa em andamento (ou ESC)",
                 "/clear             limpa o console",
                 "<texto livre>      envia ao assistente como comando digitado",
             ):
@@ -4630,6 +4642,16 @@ class DevConsole(QWidget):
                 cfg["api_key"] = k[:4] + "…" + k[-4:] if len(k) > 10 else "****"
             for k, v in cfg.items():
                 info(f"  {k:<14} = {v}")
+        elif name == "/tarefa":
+            if not arg:
+                bad("uso: /tarefa <objetivo completo>")
+            else:
+                from actions import task_agent
+                ok_(task_agent.executar_tarefa({"goal": arg}, player=None)[:120])
+        elif name == "/stop":
+            from actions import task_agent
+            (ok_ if task_agent.stop() else info)("parando a tarefa…" if task_agent.busy()
+                                                  else "nenhuma tarefa rodando")
         elif name == "/textonly":
             on = arg.strip().lower() not in ("off", "0", "nao", "não")
             ninerouter.save_config({"text_only": on})
@@ -4959,6 +4981,7 @@ class MainWindow(QMainWindow):
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
     _dev_sig        = pyqtSignal(object)     # 9Router / tool events → dev console
+    _winstate_sig   = pyqtSignal(bool)       # True = minimise (task agent), False = restore
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -5236,6 +5259,7 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._log_sig.connect(self._dev_console.log_line)
         self._dev_sig.connect(self._dev_console.on_event)
+        self._winstate_sig.connect(self._set_minimised)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
@@ -7482,6 +7506,19 @@ class MainWindow(QMainWindow):
 
     # ── Dev layer: console + 9Router ─────────────────────────────────────────
 
+    def _set_minimised(self, on: bool):
+        """The task agent needs the screen to itself while it works."""
+        if on:
+            self._was_max = self.isMaximized() or self.isFullScreen()
+            self.showMinimized()
+        else:
+            if getattr(self, "_was_max", False):
+                self.showMaximized()
+            else:
+                self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
     def _toggle_dev_console(self):
         self._dev_console.setVisible(not self._dev_console.isVisible())
 
@@ -7866,6 +7903,12 @@ class AtlasUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def minimize_window(self) -> None:
+        self._win._winstate_sig.emit(True)
+
+    def restore_window(self) -> None:
+        self._win._winstate_sig.emit(False)
 
     def dev_event(self, evt: dict) -> None:
         """Thread-safe: push a 9Router / tool event into the dev console."""

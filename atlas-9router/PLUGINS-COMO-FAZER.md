@@ -38,6 +38,8 @@ def run(parameters: dict, player=None) -> str:
 | `ninerouter.add_context_provider(fn)` | `fn(pedido) -> texto` anexado a **toda** pergunta enviada ao 9Router |
 | `ninerouter.add_answer_hook(fn)` | `fn(pedido, resposta)` depois de cada resposta do 9Router |
 | `ninerouter.emit("info", text=...)` | escrever no Dev Console (F12) |
+| `core.activity.record(kind, texto)` / `activity.since(t)` | registrar ou ler o que o ATLAS fez (ferramentas, tarefas, conversas) |
+| `actions.task_agent.run_sync(objetivo)` | pedir ao agente que execute uma tarefa completa na tela |
 
 Os quatro últimos (`on_load`, `on_turn`, `on_shutdown` e os ganchos do 9Router) foram
 adicionados para o Obsidian Brain, mas servem para qualquer plugin.

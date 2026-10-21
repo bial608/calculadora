@@ -139,7 +139,33 @@ def _search_in_app(query: str) -> None:
     _clear_and_paste(query)
     time.sleep(1.0)
 
+def _agent_send(app_name: str, receiver: str, message: str):
+    """Send through the autonomous agent: it looks at the screen, finds the
+    conversation, checks it is the right person, types, sends and checks the
+    message appears. None when the agent cannot run here (then: blind path)."""
+    try:
+        from actions import task_agent
+    except Exception as e:
+        print(f"[SendMessage] task agent unavailable ({e})")
+        return None
+    goal = (f"Enviar no {app_name} para o contato '{receiver}' exatamente esta "
+            f"mensagem: \"{message}\". Abra o {app_name}, encontre a conversa de "
+            f"'{receiver}', confirme que é a pessoa certa, digite e envie; termine "
+            f"quando a mensagem aparecer enviada na conversa.")
+    status, summary = task_agent.run_sync(goal)
+    if status == "done":
+        return outcome.done("send_message", platform=app_name, to=receiver,
+                            verified=True)
+    if status == "needs_user":
+        return outcome.failed("send_message", f"I need you: {summary}",
+                              platform=app_name, to=receiver)
+    return outcome.failed("send_message", summary, platform=app_name, to=receiver)
+
+
 def _desktop_send(app_name: str, receiver: str, message: str) -> str:
+    via_agent = _agent_send(app_name, receiver, message)
+    if via_agent is not None:
+        return via_agent
     if not _open_app(app_name):
         return outcome.failed(
             "send_message", f"{app_name} could not be opened, so nothing was "

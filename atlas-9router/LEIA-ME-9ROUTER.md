@@ -156,8 +156,8 @@ no Obsidian (ou use ⚙ → PLUGIN SETTINGS → *Obsidian Brain* → caminho do 
                                             Decisões, Pendências, [[Tópicos]]
   Conhecimento/<Assunto>.md                 nota criada quando o assunto ainda não existia;
                                             conversas seguintes sobre ele são acrescentadas
-  Atividade/2026-10-20.md                   o que você fez na tela, a cada 15 min, com miniaturas
-  Prints/2026-10-20/19-33-00.jpg            1 print a cada 3 min (apagados após 14 dias)
+  Atividade/2026-10-20.md                   por print: 🟢 aprendi · 🔵 o que eu fiz · 🔴 sobre você
+  Prints/                                   print temporário — apagado depois de estudado
   Perfil.md                                 quem você é, rotina, ferramentas, projetos,
                                             preferências e como o ATLAS pode ajudar melhor
 ```
@@ -171,10 +171,29 @@ dois veem a mesma memória. Se nada bater, a resposta vira uma nota nova.
 **Resumo da conversa**: feito pelo 9Router (ou pelo Gemini, se a ponte estiver desligada) ao
 fechar o ATLAS. Se o app cair, a transcrição já está salva e o resumo é feito ao ligar de novo.
 
-**Prints**: o Gemini descreve 5 prints de uma vez, ou seja, 1 chamada a cada 15 min, não a cada
-print. Telas iguais não são salvas. Os prints **pausam sozinhos** se o título da janela ativa
-tiver *senha, password, banco, bank, pix, cartão, 1password, bitwarden, keepass, anônima…*
-(dá para editar a lista). Por voz: "pausa os prints" / "volta os prints".
+**Prints**: a cada 3 min o ATLAS tira um print, o Gemini estuda **aquele print** e o ATLAS
+escreve em `ATLAS/Atividade/<data>.md`, em callouts coloridos nativos do Obsidian:
+
+```
+## 14:03 · VS Code
+*Você estava:* editando main.py do ATLAS
+
+> [!success] 🟢 Aprendi          ← verde: o que ele aprendeu com o print
+> - Projeto ATLAS em Python com PyQt6
+
+> [!info] 🔵 O que eu fiz         ← azul: o que o ATLAS fez desde o print anterior
+> - Tarefa — enviei a mensagem para a Maria
+
+> [!danger] 🔴 Sobre você         ← vermelho: o que ele percebeu sobre você
+> - Prefere atalhos de teclado
+```
+
+**Depois de salvar, o print é apagado.** Se a análise falhar (sem internet, cota), o print fica
+guardado e é estudado de novo no próximo ciclo ou ao religar; os não analisados somem após
+14 dias. O Dev Console (F12) mostra as mesmas linhas nas mesmas cores. Telas iguais não geram
+print novo. Os prints **pausam sozinhos** se o título da janela ativa tiver *senha, password,
+banco, bank, pix, cartão, 1password, bitwarden, keepass, anônima…* (lista editável).
+Por voz: "pausa os prints" / "volta os prints".
 ⚠ Os prints ficam dentro do vault: se ele sincroniza (Obsidian Sync, iCloud, Drive), os prints
 vão junto.
 
@@ -182,3 +201,29 @@ Suas próprias notas **nunca são editadas**, só lidas e linkadas. O ATLAS só 
 ele mesmo criou (`source: atlas` no frontmatter).
 
 Como escrever outros plugins: veja `PLUGINS-COMO-FAZER.md`.
+
+## Autonomia: tarefas completas de uma vez
+
+Peça a tarefa inteira, por exemplo *"manda no WhatsApp pra Maria que eu vou me atrasar 10 minutos"*.
+O ATLAS chama a ferramenta **`executar_tarefa`**, que funciona assim:
+
+1. **Planeja**: o 9Router quebra o pedido em etapas (só texto, combina com os seus modelos).
+2. **Olha, age e confere**: tira um print da tela, o Gemini escolhe UMA ação (abrir app, clicar,
+   digitar, atalho, rolar), o ATLAS executa, espera a tela parar de mudar e olha de novo.
+3. **Se travar**: a mesma ação na mesma tela faz o 9Router replanejar (até 2 vezes).
+4. **Termina** só quando o resultado aparece na tela (ex.: a mensagem enviada no chat) e te fala
+   o que aconteceu.
+
+Enquanto trabalha, a janela do ATLAS é minimizada e volta no fim. Cada passo aparece no
+Dev Console (linhas `⚙ agent`).
+
+**Parar:** ESC, dizer "para a tarefa", `/stop` no console, ou jogar o mouse num canto da tela
+(parada de emergência).
+**Ele para e te pergunta** antes de: digitar senha ou código, pagar ou comprar, apagar coisas,
+aceitar termos, ou quando há dois contatos com o mesmo nome.
+Limites: 30 passos ou 5 minutos por tarefa.
+
+O `send_message` (WhatsApp, Telegram…) também usa o agente quando não há driver próprio do app,
+em vez de digitar às cegas.
+
+No console: `/tarefa <objetivo>` executa direto, sem voz.

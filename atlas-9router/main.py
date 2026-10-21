@@ -78,6 +78,7 @@ from memory.config_manager     import (
 )
 from core                     import gemini as _gemini
 from core                     import ninerouter
+from core                     import activity
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
@@ -688,6 +689,11 @@ class AtlasLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        try:
+            from actions import task_agent as _ta
+            _ta.set_player(self.ui)
+        except Exception as e:
+            print(f"[ATLAS] task agent unavailable: {e}")
         # Plugin lifecycle: on_load now; on_turn per exchange; on_shutdown on exit.
         self._pending_user_turn = ""
         self._plugin_registry.start({
@@ -1061,6 +1067,13 @@ class AtlasLive:
             if drained:
                 print(f"[ATLAS] ✋ Interrupted — {drained} audio chunks discarded")
         self.set_speaking(False)
+        # ESC also stops an autonomous task in progress.
+        try:
+            from actions import task_agent
+            if task_agent.stop():
+                self.ui.write_log("SYS: Tarefa interrompida.")
+        except Exception:
+            pass
         # The words we were about to mouth are never going to be spoken now.
         self._visemes.reset()
         self._play_cursor = 0.0     # next batch starts a fresh timeline
@@ -1193,6 +1206,21 @@ class AtlasLive:
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
+        if "executar_tarefa" in _names:
+            parts.append(
+                "\n[AUTONOMY]\n"
+                "Finish what the user asked in ONE go. When a request needs several "
+                "steps, do all of them yourself: chain your tools one after another "
+                "without stopping to report each step or asking permission to "
+                "continue. Anything that has to be done inside an application's "
+                "interface — send a WhatsApp/Telegram message to someone, search "
+                "and open something, fill a form, reply to an email — is ONE call "
+                "to executar_tarefa with the complete goal (who, exact text, which "
+                "app). Never tell the user to do part of it, never ask them to split "
+                "the request. Ask a question only when an essential detail is "
+                "missing (e.g. the message text). If the user says stop/para/"
+                "cancela during a task, call executar_tarefa with action='stop'.\n"
+            )
         if _relay_on:
             # Last on purpose: the most recent instruction is the one a model
             # weighs most, and this one overrides how every answer is produced.
@@ -1209,8 +1237,11 @@ class AtlasLive:
                 "something visual or a file.\n"
                 "3. When the result arrives, speak the [9ROUTER ANSWER] faithfully. "
                 "Do not add to it, do not 'correct' it.\n"
-                "4. Pure computer actions (open an app, volume, reminders, media, "
-                "memory) still use their own tools directly; afterwards confirm briefly.\n"
+                "4. Doing things on the computer is NEVER sent to ask_9router: a "
+                "single action (open an app, volume, reminder, media, memory) uses "
+                "its own tool; anything with several steps inside an app (send a "
+                "message, search and open, fill, reply) is ONE executar_tarefa call "
+                "with the whole goal. Afterwards confirm briefly.\n"
                 "5. Never say you are consulting anything unless the wait is long; "
                 "never mention 9Router unless asked.\n"
                 f"6. You are {self._asst_name}. The ONLY change you may make to a "
@@ -1481,6 +1512,9 @@ class AtlasLive:
             self.ui.set_state("LISTENING")
 
         print(f"[ATLAS] 📤 {name} → {str(result)[:80]}")
+        if name not in activity.QUIET_TOOLS:
+            _brief = ", ".join(f"{k}={str(v)[:40]}" for k, v in args.items())
+            activity.record("tool", f"{name}({_brief})", result=str(result)[:160])
 
         # A tool that declared itself NON_BLOCKING also says when its answer may
         # re-enter the conversation. Without this the model finishes whatever it
