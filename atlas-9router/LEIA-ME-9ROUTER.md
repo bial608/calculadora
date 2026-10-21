@@ -227,3 +227,23 @@ O `send_message` (WhatsApp, Telegram…) também usa o agente quando não há dr
 em vez de digitar às cegas.
 
 No console: `/tarefa <objetivo>` executa direto, sem voz.
+
+## Painel Recursos (⚙ → RECURSOS)
+
+Um lugar para ligar/desligar cada recurso, com pequenas configurações:
+
+- **🎙 Palavra de ativação** — responder só quando chamado. Duas opções:
+  *Hey Jarvis* (pronto, openwakeword) ou *Ei ATLAS* (personalizada, via
+  **Porcupine/Picovoice**: `pip install pvporcupine`, uma *access key* grátis em
+  console.picovoice.ai e o arquivo `.ppn` da frase que você cria lá). Se o
+  Porcupine não estiver pronto, cai sozinho no *Hey Jarvis*.
+- **✋ Interromper falando (barge-in)** — pode cortar o ATLAS falando por cima;
+  a conversa continua de onde parou com a informação nova. Desligável.
+- **⚡ Modo rápido** — nas tarefas, faz uma sequência curta de passos por olhada
+  (só o 1º mexe o mouse; o resto é teclado), ficando mais ágil.
+- **🔔 Avisos em background** — chave geral + sub-opções: hardware (HD cheio,
+  CPU, temperatura), assuntos acompanhados, lembretes por horário/contexto.
+- **👁 Visão** — deixar o ATLAS ver a tela e a webcam (quando desligado, ele
+  nem recebe as ferramentas de visão e sabe que não pode ver).
+
+Mudanças em visão, barge-in e palavra de ativação valem ao salvar (ele reconecta).
