@@ -1,0 +1,74 @@
+{
+  "version": "2026.10.23",
+  "title": "Painel Recursos, Ei ATLAS, modo rapido, barge-in",
+  "base": "ec2427d",
+  "head": "28f4167",
+  "files": [
+    {
+      "path": "LEIA-ME-9ROUTER.md",
+      "sha256": "801dbbfc6802f80974deaa765c8d591107ccc6f9b982db916e2980c841e15d08",
+      "size": 13441
+    },
+    {
+      "path": "PLUGINS-COMO-FAZER.md",
+      "sha256": "27a461f7b747cefdeb4e30c4f93290d77fcd06c867480d367a0334c857f40e98",
+      "size": 2668
+    },
+    {
+      "path": "actions/send_message.py",
+      "sha256": "3157f0e00801b7b648a2860b2416de36557cb7d9d3926b9602fbe2c690ed3009",
+      "size": 17902
+    },
+    {
+      "path": "actions/task_agent.py",
+      "sha256": "1b14cc899e5ca69296b6f9f4bfceac8a4486e7542e3f3c8e696c858ef751c2fd",
+      "size": 36193
+    },
+    {
+      "path": "actions/teach_task.py",
+      "sha256": "f12e79619f080e6735d0a83fa1959db7729fb0d314f2c286da28d875216edbed",
+      "size": 2018
+    },
+    {
+      "path": "core/activity.py",
+      "sha256": "df01893c43fe4d2dbdc70b268bf0a4d7a6a430a34620a9761375ebdee0a9d30d",
+      "size": 1273
+    },
+    {
+      "path": "core/hotkey.py",
+      "sha256": "50dddb96d539ca6e3f8da10baa78872bb8a25c923ca1da0b4ff34e44f29dd914",
+      "size": 9385
+    },
+    {
+      "path": "core/skills.py",
+      "sha256": "aac761c290d45c2a226104a14a2bf6eccfc681b7dbfff55b9e8bd198ba33fb88",
+      "size": 10250
+    },
+    {
+      "path": "core/wake_word.py",
+      "sha256": "a6712a95ac431891cd8bf16c7831ec693b096d1eaf532c6d66d272a0a8d94140",
+      "size": 12925
+    },
+    {
+      "path": "main.py",
+      "sha256": "6ba57d913d3fa622fd8130e2ace8ad740ed014d64f25860619ffcc9b60bd07b8",
+      "size": 139757
+    },
+    {
+      "path": "memory/config_manager.py",
+      "sha256": "e5d2706547ee882a99000659268b2eb1201e91f66dd998dd576b06693794729e",
+      "size": 22767
+    },
+    {
+      "path": "plugins/obsidian_brain.py",
+      "sha256": "502a5befd124c06ebe2244a41b9b63d361d12f3913d776bcdae545813ecb64b9",
+      "size": 47144
+    },
+    {
+      "path": "ui.py",
+      "sha256": "d36e05501a38a5f0d58326242ecd2f95833989744adfd8800f8f84fa2a2fc4cc",
+      "size": 358623
+    }
+  ],
+  "delete": []
+}
