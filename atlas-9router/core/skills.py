@@ -63,9 +63,15 @@ _JSON_FENCE = "```json atlas-habilidade"
 
 
 def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    # Per-account when logged in (see memory/config_manager.get_base_dir), else
+    # the install root — so each account keeps its own learned skills fallback.
+    try:
+        from core import profile
+        return profile.base_dir()
+    except Exception:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).resolve().parent.parent
 
 
 def folder() -> Path:

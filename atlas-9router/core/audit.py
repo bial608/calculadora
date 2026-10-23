@@ -29,9 +29,15 @@ _LABEL = {"tool": "🔧", "task": "🎯", "agent_step": "·", "conversa": "💬"
 
 
 def _base() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    # Per-account when logged in (see memory/config_manager.get_base_dir), else
+    # the install root — so each account keeps its own audit trail.
+    try:
+        from core import profile
+        return profile.base_dir()
+    except Exception:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).resolve().parent.parent
 
 
 def _jsonl_path(d: datetime) -> Path:

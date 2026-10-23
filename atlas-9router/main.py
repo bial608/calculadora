@@ -55,6 +55,22 @@ for _stream in ("stdout", "stderr"):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Login — choose the account BEFORE any module that stores data is imported ─
+# config_manager, ninerouter, gemini, audit and skills all decide their data
+# folder from core.profile.base_dir() at import time, so the active account has
+# to be set first. run_login() shows the screen and sets ATLAS_PROFILE; closing
+# it without logging in exits. core.boot and core.profile are light (no GUI, no
+# data paths) so importing them here changes nothing about where data lives.
+import sys as _sys_login
+try:
+    from core.boot import run_login
+    if not run_login():
+        raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception as _login_err:          # never let the gate itself block startup
+    print(f"[boot] login indisponível, seguindo sem perfil: {_login_err}")
+
 import asyncio
 import re
 import threading

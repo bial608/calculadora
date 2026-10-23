@@ -72,10 +72,19 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-if getattr(sys, "frozen", False):
-    _BASE = Path(sys.executable).parent
-else:
-    _BASE = Path(__file__).resolve().parent.parent
+def _base_dir() -> Path:
+    # Per-account when logged in (see memory/config_manager.get_base_dir), else
+    # the install root — so each account reads its own Gemini keys.
+    try:
+        from core import profile
+        return profile.base_dir()
+    except Exception:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).resolve().parent.parent
+
+
+_BASE = _base_dir()
 
 _KEY_FILE = _BASE / "config" / "api_keys.json"
 

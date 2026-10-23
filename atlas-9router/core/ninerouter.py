@@ -41,9 +41,15 @@ from typing import Callable, Optional
 
 
 def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    # Per-account when logged in (see memory/config_manager.get_base_dir), else
+    # the install root.
+    try:
+        from core import profile
+        return profile.base_dir()
+    except Exception:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).resolve().parent.parent
 
 
 BASE_DIR    = _base_dir()

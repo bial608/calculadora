@@ -5056,6 +5056,222 @@ class FeaturesOverlay(_HudOverlay):
         self.close()
 
 
+class AdminOverlay(_HudOverlay):
+    """The admin's view of every LOCAL account on this machine.
+
+    Only opened for the built-in admin (the button that opens it is drawn only
+    then). For each profile it shows what that account has saved — settings,
+    memory size, learned skills, audit days — and lets the admin enter it,
+    open its folder to see the actual files, or delete it.
+
+    LOCAL only: these are the profiles stored under this install's profiles/
+    folder, not access to any other computer. The network/fleet layer, if added
+    later, feeds remote machines into this same list.
+    """
+
+    switch_requested = pyqtSignal(str)
+    _OW = 520
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from core import accounts, profile
+        self._accounts = accounts
+        self._profile = profile
+        self._pending_delete = ""     # nick awaiting a confirm click
+
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            AdminOverlay {{
+                background: rgba(0, 8, 5, 248);
+                border: 1px solid {_TERM_GREEN};
+                border-radius: 6px;
+            }}
+            QLabel {{ background: transparent; }}
+        """)
+        self.setFixedWidth(self._OW)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; }"
+            f"QScrollBar::handle:vertical {{ background: #0f3d2a; border-radius: 4px; }}")
+        self._body = QWidget(); self._body.setStyleSheet("background: transparent;")
+        self._lay = QVBoxLayout(self._body)
+        self._lay.setContentsMargins(20, 16, 20, 12)
+        self._lay.setSpacing(6)
+        self._scroll.setWidget(self._body)
+        outer.addWidget(self._scroll, stretch=1)
+
+        self._rebuild()
+
+    # — small styled makers, matching the 9Router panel —
+    def _btn(self, text, slot=None, danger=False):
+        b = QPushButton(text)
+        b.setFont(_mono(8, True))
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        col = C.RED if danger else _TERM_GREEN
+        b.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {col};"
+            f" border: 1px solid {'#5a1420' if danger else '#0f3d2a'};"
+            f" border-radius: 3px; padding: 4px 10px; }}"
+            f"QPushButton:hover {{ border-color: {col}; background:"
+            f" {'#1a0407' if danger else '#001a10'}; }}")
+        if slot:
+            b.clicked.connect(slot)
+        return b
+
+    def _clear(self):
+        while self._lay.count():
+            it = self._lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.setParent(None)
+            else:
+                lay = it.layout()
+                if lay:
+                    while lay.count():
+                        sub = lay.takeAt(0).widget()
+                        if sub:
+                            sub.setParent(None)
+
+    def _rebuild(self):
+        self._clear()
+        hdr = QLabel("♛  ADMIN  ·  contas locais")
+        hdr.setFont(_mono(11, True)); hdr.setStyleSheet(f"color: {_TERM_GREEN};")
+        self._lay.addWidget(hdr)
+        sub = QLabel("Tudo que cada conta salvou NESTE computador. Entrar reinicia o "
+                     "ATLAS naquela conta. Isto é local — não é acesso a outra máquina.")
+        sub.setFont(_mono(7)); sub.setWordWrap(True)
+        sub.setStyleSheet(f"color: {C.TEXT_DIM};")
+        self._lay.addWidget(sub)
+
+        active = self._profile.active()
+        for info in self._accounts.list_users():
+            self._add_card(info, active)
+
+        # Profiles with data but no account record (e.g. created before login).
+        known = {u["nick"] for u in self._accounts.list_users()}
+        for name in self._profile.list_profiles():
+            if name not in known:
+                self._add_card({"nick": name, "admin": False,
+                                "created": "(perfil órfão)"}, active)
+
+        self._lay.addStretch(1)
+
+    def _add_card(self, info: dict, active: str):
+        nick = info["nick"]
+        is_admin = info.get("admin")
+        is_active = (nick == active) or (is_admin and self._accounts.is_admin(active))
+
+        card = QWidget()
+        card.setStyleSheet(
+            f"background: #00140d; border: 1px solid "
+            f"{_TERM_GREEN if is_active else '#0f3d2a'}; border-radius: 5px;")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(12, 9, 12, 9); cl.setSpacing(4)
+
+        crown = "♛ " if is_admin else ""
+        here = "   ◀ você está aqui" if is_active else ""
+        name = QLabel(f"{crown}{nick}{here}")
+        name.setFont(_mono(10, True))
+        name.setStyleSheet(f"color: {_TERM_GREEN if is_active else C.WHITE};")
+        cl.addWidget(name)
+
+        cfg_ok, nbytes, skills, adays = self._summ(nick)
+        line = (f"config: {'sim' if cfg_ok else '—'}   ·   memória: {self._hsize(nbytes)}"
+                f"   ·   habilidades: {skills}   ·   auditoria: {adays}d")
+        meta = QLabel(line)
+        meta.setFont(_mono(7)); meta.setStyleSheet(f"color: {C.TEXT_MED};")
+        cl.addWidget(meta)
+        if info.get("created"):
+            cr = QLabel(f"criada: {info['created']}")
+            cr.setFont(_mono(7)); cr.setStyleSheet(f"color: {C.TEXT_DIM};")
+            cl.addWidget(cr)
+
+        row = QHBoxLayout(); row.setSpacing(8)
+        if not is_active:
+            row.addWidget(self._btn("entrar como",
+                                    lambda _=False, n=nick: self.switch_requested.emit(n)))
+        row.addWidget(self._btn("abrir pasta",
+                                lambda _=False, n=nick: self._open_folder(n)))
+        # The admin account is built in and can't be deleted; nor can the
+        # account currently running this session.
+        if not is_admin and not is_active:
+            if self._pending_delete == nick:
+                row.addWidget(self._btn("confirmar apagar?",
+                                        lambda _=False, n=nick: self._delete(n), danger=True))
+            else:
+                row.addWidget(self._btn("apagar",
+                                        lambda _=False, n=nick: self._ask_delete(n), danger=True))
+        row.addStretch(1)
+        cl.addLayout(row)
+        self._lay.addWidget(card)
+
+    # — data —
+    def _summ(self, nick: str):
+        """Cheap summary of one profile's folder."""
+        from pathlib import Path
+        d = self._profile.profiles_root() / self._profile._safe(nick)
+        cfg_ok = (d / "config" / "api_keys.json").exists()
+        mem = d / "memory"
+        nbytes = 0
+        if mem.is_dir():
+            try:
+                nbytes = sum(f.stat().st_size for f in mem.rglob("*") if f.is_file())
+            except Exception:
+                nbytes = 0
+        sk = mem / "habilidades"
+        skills = len(list(sk.glob("*.md"))) if sk.is_dir() else 0
+        au = mem / "audit"
+        adays = len(list(au.glob("*.jsonl"))) if au.is_dir() else 0
+        return cfg_ok, nbytes, skills, adays
+
+    @staticmethod
+    def _hsize(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024 or unit == "GB":
+                return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+            n /= 1024
+        return f"{n:.1f}GB"
+
+    def _open_folder(self, nick: str):
+        import os, sys, subprocess
+        d = self._profile.profiles_root() / self._profile._safe(nick)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            if sys.platform.startswith("win"):
+                os.startfile(str(d))                       # noqa: S606 (Windows only)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(d)])
+            else:
+                subprocess.Popen(["xdg-open", str(d)])
+        except Exception:
+            pass
+
+    def _ask_delete(self, nick: str):
+        self._pending_delete = nick
+        self._rebuild()
+
+    def _delete(self, nick: str):
+        import shutil
+        self._pending_delete = ""
+        try:
+            d = self._profile.profiles_root() / self._profile._safe(nick)
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            self._accounts.delete(nick)
+        except Exception:
+            pass
+        self._rebuild()
+
+
 class NineRouterOverlay(_HudOverlay):
     """Settings for the 9Router bridge: address, key, model, behaviour."""
 
@@ -6807,6 +7023,22 @@ class MainWindow(QMainWindow):
         feat_btn.clicked.connect(self._open_features)
         lay.addWidget(feat_btn)
 
+        # Admin panel — shown ONLY when the logged-in account is the built-in
+        # admin. Lets the owner browse every LOCAL profile on this machine:
+        # switch into one, open its data folder, or delete it.
+        try:
+            from core import accounts as _acc, profile as _prof
+            if _acc.is_admin(_prof.active()):
+                admin_btn = QPushButton("♛  ADMIN  (contas / perfis)")
+                admin_btn.setFixedHeight(26)
+                admin_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+                admin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                admin_btn.setStyleSheet(_BTN_STYLE_PRI)
+                admin_btn.clicked.connect(self._open_admin)
+                lay.addWidget(admin_btn)
+        except Exception:
+            pass
+
         w.adjustSize()
         return w
 
@@ -8080,6 +8312,40 @@ class MainWindow(QMainWindow):
         # Vision / barge-in are baked into the session at connect time → rebuild.
         if self.on_audio_device_change:
             self.on_audio_device_change()
+
+    # ── Admin panel (local profiles) ─────────────────────────────────────────
+
+    def _open_admin(self):
+        try:
+            ov = AdminOverlay(parent=self.centralWidget())
+        except Exception as e:
+            self._log.append_log(f"SYS: Painel admin indisponível: {e}")
+            return
+        ov.switch_requested.connect(self._on_admin_switch)
+        self._centre_overlay(ov)
+        self._admin_overlay = ov
+
+    def _on_admin_switch(self, nick: str):
+        """'Entrar como' another profile: restart ATLAS with that account.
+        A restart is the honest way — every data-path module reads its folder
+        once at import, so the new account only fully takes hold on a fresh
+        start, and this avoids half-switched state."""
+        import os, sys, subprocess
+        self._log.append_log(f"SYS: Entrando como '{nick}' — reiniciando o ATLAS…")
+        try:
+            env = dict(os.environ)
+            env["ATLAS_PROFILE"] = nick
+            # Frozen build: sys.executable IS the app and sys.argv[0] repeats it,
+            # so pass only the extra args. Script run: python + the script path.
+            if getattr(sys, "frozen", False):
+                args = [sys.executable, *sys.argv[1:]]
+            else:
+                args = [sys.executable, *sys.argv]
+            subprocess.Popen(args, env=env)
+        except Exception as e:
+            self._log.append_log(f"SYS: não consegui reiniciar: {e}")
+            return
+        QApplication.quit()
 
     # ── Memory panel ─────────────────────────────────────────────────────────
 

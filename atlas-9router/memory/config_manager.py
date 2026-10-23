@@ -3,9 +3,16 @@ import sys
 from pathlib import Path
 
 def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    # When an account is logged in (core/boot.py set ATLAS_PROFILE), this is that
+    # account's folder, so its settings live apart from everyone else's. With no
+    # profile set it is the install root, exactly as before login existed.
+    try:
+        from core import profile
+        return profile.base_dir()
+    except Exception:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).resolve().parent.parent
 
 BASE_DIR    = get_base_dir()
 CONFIG_DIR  = BASE_DIR / "config"
