@@ -1,0 +1,99 @@
+{
+  "version": "2026.10.25",
+  "title": "Cliques corretos em tela com escala/DPI + deteccao de mouse travado",
+  "base": "ec2427d",
+  "head": "0010d8d",
+  "files": [
+    {
+      "path": "LEIA-ME-9ROUTER.md",
+      "sha256": "0b14536f7ee54b9464470820c93f1392063fe53e59d5c26bc9cd81508f906a89",
+      "size": 15130
+    },
+    {
+      "path": "PLUGINS-COMO-FAZER.md",
+      "sha256": "27a461f7b747cefdeb4e30c4f93290d77fcd06c867480d367a0334c857f40e98",
+      "size": 2668
+    },
+    {
+      "path": "actions/send_message.py",
+      "sha256": "3157f0e00801b7b648a2860b2416de36557cb7d9d3926b9602fbe2c690ed3009",
+      "size": 17902
+    },
+    {
+      "path": "actions/task_agent.py",
+      "sha256": "6785deb596d19600816501705e510abc9a565e5c3cbff170c9ba1d0b7432409c",
+      "size": 42131
+    },
+    {
+      "path": "actions/teach_task.py",
+      "sha256": "f12e79619f080e6735d0a83fa1959db7729fb0d314f2c286da28d875216edbed",
+      "size": 2018
+    },
+    {
+      "path": "core/activity.py",
+      "sha256": "df01893c43fe4d2dbdc70b268bf0a4d7a6a430a34620a9761375ebdee0a9d30d",
+      "size": 1273
+    },
+    {
+      "path": "core/audit.py",
+      "sha256": "47c7f092a72f5adc0c9261edaab3c827a8995196643f69a0155d6ff3b3da1d1e",
+      "size": 4004
+    },
+    {
+      "path": "core/capabilities.py",
+      "sha256": "c31502b86fd3e174a2bfed706cfc4977ee778f2a37b45379239acfab3f6f9c15",
+      "size": 3626
+    },
+    {
+      "path": "core/guard.py",
+      "sha256": "af91d90c6b24854dee5be4d6fad30863626d3dd373996b0480cb229e7dde6e15",
+      "size": 5607
+    },
+    {
+      "path": "core/health.py",
+      "sha256": "41f16f86378f410c73c00a73cee283c16e9912b4abf89946230e5dfeab116786",
+      "size": 2098
+    },
+    {
+      "path": "core/hotkey.py",
+      "sha256": "a731c5504aa105e39fad32ea64e35f1f8d5c6829d71f6216156792a77e5258ff",
+      "size": 9400
+    },
+    {
+      "path": "core/ninerouter.py",
+      "sha256": "73bb85ded726daf020d8432965c831a398210d549a274d9d1f4be6f88c28977b",
+      "size": 35524
+    },
+    {
+      "path": "core/skills.py",
+      "sha256": "aac761c290d45c2a226104a14a2bf6eccfc681b7dbfff55b9e8bd198ba33fb88",
+      "size": 10250
+    },
+    {
+      "path": "core/wake_word.py",
+      "sha256": "a6712a95ac431891cd8bf16c7831ec693b096d1eaf532c6d66d272a0a8d94140",
+      "size": 12925
+    },
+    {
+      "path": "main.py",
+      "sha256": "034e48c4076d2c561a711fd0249b49df284996c34c5421a17b16e16c48dbfe2d",
+      "size": 140097
+    },
+    {
+      "path": "memory/config_manager.py",
+      "sha256": "e5d2706547ee882a99000659268b2eb1201e91f66dd998dd576b06693794729e",
+      "size": 22767
+    },
+    {
+      "path": "plugins/obsidian_brain.py",
+      "sha256": "193b8c412326ce4356acaade96d45c68d0730efc3b1abd39d23385e71f0d500a",
+      "size": 47448
+    },
+    {
+      "path": "ui.py",
+      "sha256": "2426a6514830c66aa9e575ecd948a0e35ec89d643e8baea49f677987cdc574a7",
+      "size": 365238
+    }
+  ],
+  "delete": []
+}

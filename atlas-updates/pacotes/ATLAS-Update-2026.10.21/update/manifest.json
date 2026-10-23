@@ -1,0 +1,49 @@
+{
+  "version": "2026.10.21",
+  "title": "Autonomia (executar_tarefa) + prints coloridos no Obsidian",
+  "base": "ec2427d",
+  "head": "7175713",
+  "files": [
+    {
+      "path": "LEIA-ME-9ROUTER.md",
+      "sha256": "c24cc9df92589e856c149e1b57bdd9ab6ae56314bf2adc1a4d781da57be38380",
+      "size": 12245
+    },
+    {
+      "path": "PLUGINS-COMO-FAZER.md",
+      "sha256": "27a461f7b747cefdeb4e30c4f93290d77fcd06c867480d367a0334c857f40e98",
+      "size": 2668
+    },
+    {
+      "path": "actions/send_message.py",
+      "sha256": "3157f0e00801b7b648a2860b2416de36557cb7d9d3926b9602fbe2c690ed3009",
+      "size": 17902
+    },
+    {
+      "path": "actions/task_agent.py",
+      "sha256": "852e76c8b77641ff7ce6e4f61c379ac4afdcba92e30c4b7520be05275fabfffe",
+      "size": 21539
+    },
+    {
+      "path": "core/activity.py",
+      "sha256": "df01893c43fe4d2dbdc70b268bf0a4d7a6a430a34620a9761375ebdee0a9d30d",
+      "size": 1273
+    },
+    {
+      "path": "main.py",
+      "sha256": "5384bf4285f875f34425891f34b36b11325f6a5fb5d0aef558be3baa95ca8f28",
+      "size": 137556
+    },
+    {
+      "path": "plugins/obsidian_brain.py",
+      "sha256": "bbe3a382fa8cbf1ce1d3eaad84e83fdfdcc1a363fc153b84b5cb604fd730bc99",
+      "size": 45968
+    },
+    {
+      "path": "ui.py",
+      "sha256": "b8d8a304a9fa6a653ef45000ab055c2fd8c0a97505f07c4bac45d6aba4a9d5f4",
+      "size": 346284
+    }
+  ],
+  "delete": []
+}

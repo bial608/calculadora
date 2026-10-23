@@ -1,0 +1,64 @@
+{
+  "version": "2026.10.22",
+  "title": "Cliques precisos, habilidades, fazer juntos, mute global, 5 cores",
+  "base": "ec2427d",
+  "head": "7de471f",
+  "files": [
+    {
+      "path": "LEIA-ME-9ROUTER.md",
+      "sha256": "c24cc9df92589e856c149e1b57bdd9ab6ae56314bf2adc1a4d781da57be38380",
+      "size": 12245
+    },
+    {
+      "path": "PLUGINS-COMO-FAZER.md",
+      "sha256": "27a461f7b747cefdeb4e30c4f93290d77fcd06c867480d367a0334c857f40e98",
+      "size": 2668
+    },
+    {
+      "path": "actions/send_message.py",
+      "sha256": "3157f0e00801b7b648a2860b2416de36557cb7d9d3926b9602fbe2c690ed3009",
+      "size": 17902
+    },
+    {
+      "path": "actions/task_agent.py",
+      "sha256": "50cb353866fadf1cb5aa0f10b138ba3790c499fe66ee53c96735ae070bba7658",
+      "size": 34937
+    },
+    {
+      "path": "actions/teach_task.py",
+      "sha256": "f12e79619f080e6735d0a83fa1959db7729fb0d314f2c286da28d875216edbed",
+      "size": 2018
+    },
+    {
+      "path": "core/activity.py",
+      "sha256": "df01893c43fe4d2dbdc70b268bf0a4d7a6a430a34620a9761375ebdee0a9d30d",
+      "size": 1273
+    },
+    {
+      "path": "core/hotkey.py",
+      "sha256": "50dddb96d539ca6e3f8da10baa78872bb8a25c923ca1da0b4ff34e44f29dd914",
+      "size": 9385
+    },
+    {
+      "path": "core/skills.py",
+      "sha256": "aac761c290d45c2a226104a14a2bf6eccfc681b7dbfff55b9e8bd198ba33fb88",
+      "size": 10250
+    },
+    {
+      "path": "main.py",
+      "sha256": "c2c46d2e06a69743fd3dd310e2f9669ef052d163f8d5e616cf7cbf553165126b",
+      "size": 137787
+    },
+    {
+      "path": "plugins/obsidian_brain.py",
+      "sha256": "502a5befd124c06ebe2244a41b9b63d361d12f3913d776bcdae545813ecb64b9",
+      "size": 47144
+    },
+    {
+      "path": "ui.py",
+      "sha256": "bc3d007efb44f78e08d8e40b79d29c0a7a5080ca936eb79d7e8d7eded53cf28c",
+      "size": 347221
+    }
+  ],
+  "delete": []
+}
