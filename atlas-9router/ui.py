@@ -5272,6 +5272,234 @@ class AdminOverlay(_HudOverlay):
         self._rebuild()
 
 
+class FleetOverlay(_HudOverlay):
+    """Admin-only: your other computers, controlled over SSH.
+
+    Add a machine (name · host · user), test it, run a command and read the
+    output, open its live desktop (RDP), or copy this PC's SSH key line to
+    authorize it. The transport is plain OpenSSH — see core/fleet.py for why
+    that, and not a homemade server, is the safe way to do this.
+    """
+
+    _result_sig = pyqtSignal(str)
+    _OW = 540
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from core import fleet
+        self._fleet = fleet
+
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            FleetOverlay {{
+                background: rgba(0, 8, 5, 248);
+                border: 1px solid {_TERM_GREEN};
+                border-radius: 6px;
+            }}
+            QLabel {{ background: transparent; }}
+        """)
+        self.setFixedWidth(self._OW)
+        self._line_css = (
+            f"QLineEdit, QComboBox {{ background: #000d08; color: {_TERM_GREEN};"
+            f" border: 1px solid #0f3d2a; border-radius: 3px; padding: 4px 6px; }}"
+            f"QLineEdit:focus, QComboBox:focus {{ border-color: {_TERM_GREEN}; }}"
+            f"QComboBox QAbstractItemView {{ background: #000d08; color: {_TERM_GREEN};"
+            f" selection-background-color: #0f3d2a; }}")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; }"
+            f"QScrollBar::handle:vertical {{ background: #0f3d2a; border-radius: 4px; }}")
+        body = QWidget(); body.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(20, 16, 20, 12); lay.setSpacing(6)
+        self._scroll.setWidget(body)
+        outer.addWidget(self._scroll, stretch=1)
+
+        hdr = QLabel("🖧  REDE  ·  meus outros computadores")
+        hdr.setFont(_mono(11, True)); hdr.setStyleSheet(f"color: {_TERM_GREEN};")
+        lay.addWidget(hdr)
+        hint = QLabel("Controlo via SSH (OpenSSH, embutido no Windows). Em cada PC: "
+                      "Recursos opcionais → 'OpenSSH Server', depois Start-Service sshd. "
+                      "Login por chave — use 'copiar chave' abaixo. Sem servidor caseiro, "
+                      "sem porta nova: isto só funciona enquanto o SSH estiver ligado lá.")
+        hint.setFont(_mono(7)); hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {C.TEXT_DIM};")
+        lay.addWidget(hint)
+
+        self._mbox = QVBoxLayout(); self._mbox.setSpacing(6)
+        lay.addLayout(self._mbox)
+
+        # ── add a machine ─────────────────────────────────────────────────────
+        sep = QLabel("──────  adicionar máquina  ──────")
+        sep.setFont(_mono(8, True)); sep.setStyleSheet(f"color: {_TERM_BLUE};")
+        lay.addWidget(sep)
+        frow = QHBoxLayout(); frow.setSpacing(6)
+        self._f_name = QLineEdit(); self._f_name.setPlaceholderText("nome (ex.: PC sala)")
+        self._f_host = QLineEdit(); self._f_host.setPlaceholderText("IP ou nome na rede")
+        self._f_user = QLineEdit(); self._f_user.setPlaceholderText("usuário do Windows")
+        for e in (self._f_name, self._f_host, self._f_user):
+            e.setFont(_mono(8)); e.setStyleSheet(self._line_css); frow.addWidget(e)
+        lay.addLayout(frow)
+        krow = QHBoxLayout(); krow.setSpacing(6)
+        self._f_key = QLineEdit()
+        self._f_key.setPlaceholderText("caminho da chave (opcional — vazio = chave padrão)")
+        self._f_key.setFont(_mono(8)); self._f_key.setStyleSheet(self._line_css)
+        krow.addWidget(self._f_key, stretch=1)
+        krow.addWidget(self._mk_btn("+ salvar", self._add))
+        lay.addLayout(krow)
+
+        # ── run a command ─────────────────────────────────────────────────────
+        sep2 = QLabel("──────  rodar comando  ──────")
+        sep2.setFont(_mono(8, True)); sep2.setStyleSheet(f"color: {_TERM_BLUE};")
+        lay.addWidget(sep2)
+        crow = QHBoxLayout(); crow.setSpacing(6)
+        self._c_machine = QComboBox()
+        self._c_machine.setFont(_mono(8)); self._c_machine.setStyleSheet(self._line_css)
+        self._c_machine.setFixedWidth(150)
+        self._c_cmd = QLineEdit(); self._c_cmd.setPlaceholderText("comando (ex.: shutdown /r /t 0)")
+        self._c_cmd.setFont(_mono(8)); self._c_cmd.setStyleSheet(self._line_css)
+        self._c_cmd.returnPressed.connect(self._run)
+        crow.addWidget(self._c_machine); crow.addWidget(self._c_cmd, stretch=1)
+        self._c_run = self._mk_btn("▶ rodar", self._run)
+        crow.addWidget(self._c_run)
+        lay.addLayout(crow)
+        self._out = QTextEdit(); self._out.setReadOnly(True); self._out.setFixedHeight(110)
+        self._out.setFont(_mono(8))
+        self._out.setStyleSheet(f"QTextEdit {{ background: #000d08; color: {_TERM_GREEN};"
+                                f" border: 1px solid #0f3d2a; border-radius: 3px; padding: 4px; }}")
+        lay.addWidget(self._out)
+        lay.addStretch(1)
+
+        self._result_sig.connect(self._show_result)
+        self._refresh_machines()
+
+    def _mk_btn(self, text, slot=None, danger=False):
+        b = QPushButton(text)
+        b.setFont(_mono(8, True)); b.setCursor(Qt.CursorShape.PointingHandCursor)
+        col = C.RED if danger else _TERM_GREEN
+        b.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {col};"
+            f" border: 1px solid {'#5a1420' if danger else '#0f3d2a'};"
+            f" border-radius: 3px; padding: 4px 10px; }}"
+            f"QPushButton:hover {{ border-color: {col};"
+            f" background: {'#1a0407' if danger else '#001a10'}; }}")
+        if slot:
+            b.clicked.connect(slot)
+        return b
+
+    def _refresh_machines(self):
+        while self._mbox.count():
+            it = self._mbox.takeAt(0)
+            w = it.widget()
+            if w:
+                w.setParent(None)
+            elif it.layout():
+                sub = it.layout()
+                while sub.count():
+                    ww = sub.takeAt(0).widget()
+                    if ww:
+                        ww.setParent(None)
+        machines = self._fleet.load()
+        self._c_machine.clear()
+        if not machines:
+            empty = QLabel("Nenhuma máquina ainda. Adicione uma abaixo.")
+            empty.setFont(_mono(8)); empty.setStyleSheet(f"color: {C.TEXT_DIM};")
+            self._mbox.addWidget(empty)
+            return
+        for m in machines:
+            self._c_machine.addItem(m["name"])
+            card = QWidget()
+            card.setStyleSheet("background: #00140d; border: 1px solid #0f3d2a; border-radius: 5px;")
+            cl = QVBoxLayout(card); cl.setContentsMargins(12, 8, 12, 8); cl.setSpacing(4)
+            title = QLabel(f"{m['name']}")
+            title.setFont(_mono(10, True)); title.setStyleSheet(f"color: {C.WHITE};")
+            cl.addWidget(title)
+            meta = QLabel(f"{m['user']}@{m['host']}"
+                          + (f"  ·  chave: {m['key_path']}" if m.get('key_path') else ""))
+            meta.setFont(_mono(7)); meta.setStyleSheet(f"color: {C.TEXT_MED};")
+            cl.addWidget(meta)
+            row = QHBoxLayout(); row.setSpacing(8)
+            name = m["name"]
+            row.addWidget(self._mk_btn("testar", lambda _=False, n=name: self._test(n)))
+            row.addWidget(self._mk_btn("área remota", lambda _=False, n=name: self._rdp(n)))
+            row.addWidget(self._mk_btn("copiar chave", lambda _=False, n=name: self._copy_key(n)))
+            row.addWidget(self._mk_btn("apagar", lambda _=False, n=name: self._remove(n), danger=True))
+            row.addStretch(1)
+            cl.addLayout(row)
+            self._mbox.addWidget(card)
+
+    # — actions —
+    def _add(self):
+        ok, msg = self._fleet.add(self._f_name.text(), self._f_host.text(),
+                                  self._f_user.text(), self._f_key.text())
+        self._show_result(("✅ " if ok else "⚠️ ") + msg)
+        if ok:
+            for e in (self._f_name, self._f_host, self._f_user, self._f_key):
+                e.clear()
+            self._refresh_machines()
+
+    def _remove(self, name):
+        if self._fleet.remove(name):
+            self._show_result(f"🗑 '{name}' removida.")
+            self._refresh_machines()
+
+    def _copy_key(self, name):
+        line = self._fleet.keygen_hint(name)
+        try:
+            QApplication.clipboard().setText(line)
+        except Exception:
+            pass
+        self._show_result("Linha para autorizar a chave copiada. Cole no PowerShell "
+                           "deste PC (vai pedir a senha da outra máquina uma vez):\n\n" + line)
+
+    def _rdp(self, name):
+        ok, msg = self._fleet.open_rdp(name)
+        self._show_result(("🖥 " if ok else "⚠️ ") + msg)
+
+    def _busy(self, on: bool):
+        self._c_run.setEnabled(not on)
+        if on:
+            self._out.setPlainText("… executando (SSH) …")
+
+    def _test(self, name):
+        self._busy(True)
+        self._bg(lambda: self._fleet.test(name), name, "teste")
+
+    def _run(self):
+        name = self._c_machine.currentText().strip()
+        cmd = self._c_cmd.text().strip()
+        if not name or not cmd:
+            self._show_result("Escolha a máquina e escreva o comando.")
+            return
+        self._busy(True)
+        self._bg(lambda: self._fleet.run(name, cmd), name, cmd)
+
+    def _bg(self, fn, name, label):
+        """Run SSH off the UI thread so a slow/unreachable box never freezes
+        the window; the result comes back through a signal."""
+        import threading
+
+        def work():
+            try:
+                ok, out = fn()
+            except Exception as e:
+                ok, out = False, str(e)
+            self._result_sig.emit(f"{'✅' if ok else '⚠️'} [{name}] {label}\n\n{out}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_result(self, text: str):
+        self._busy(False)
+        self._out.setPlainText(text)
+
+
 class NineRouterOverlay(_HudOverlay):
     """Settings for the 9Router bridge: address, key, model, behaviour."""
 
@@ -7036,6 +7264,14 @@ class MainWindow(QMainWindow):
                 admin_btn.setStyleSheet(_BTN_STYLE_PRI)
                 admin_btn.clicked.connect(self._open_admin)
                 lay.addWidget(admin_btn)
+
+                fleet_btn = QPushButton("🖧  REDE  (meus outros PCs)")
+                fleet_btn.setFixedHeight(26)
+                fleet_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+                fleet_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                fleet_btn.setStyleSheet(_BTN_STYLE_PRI)
+                fleet_btn.clicked.connect(self._open_fleet)
+                lay.addWidget(fleet_btn)
         except Exception:
             pass
 
@@ -8346,6 +8582,15 @@ class MainWindow(QMainWindow):
             self._log.append_log(f"SYS: não consegui reiniciar: {e}")
             return
         QApplication.quit()
+
+    def _open_fleet(self):
+        try:
+            ov = FleetOverlay(parent=self.centralWidget())
+        except Exception as e:
+            self._log.append_log(f"SYS: Painel de rede indisponível: {e}")
+            return
+        self._centre_overlay(ov)
+        self._fleet_overlay = ov
 
     # ── Memory panel ─────────────────────────────────────────────────────────
 
