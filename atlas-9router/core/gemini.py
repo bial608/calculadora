@@ -321,17 +321,48 @@ def _cooling(model: str) -> bool:
         return False
 
 
+# Several keys can be configured ("gemini_api_keys": [...]) and are used
+# round-robin, so hitting one key's per-minute quota doesn't stall every call —
+# the next call simply goes out on the next key. This does NOT make one request
+# faster; it avoids the slow 429/quota waits when you use the agent a lot.
+_keys_cache = {"mtime": None, "keys": []}
+_rr = {"i": 0}
+
+
+def _all_keys(refresh: bool = False) -> list[str]:
+    try:
+        mtime = _KEY_FILE.stat().st_mtime
+    except OSError:
+        mtime = None
+    if not refresh and _keys_cache["keys"] and _keys_cache["mtime"] == mtime:
+        return _keys_cache["keys"]
+    keys: list[str] = []
+    try:
+        data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
+        single = str(data.get("gemini_api_key") or "").strip()
+        if single:
+            keys.append(single)
+        for k in (data.get("gemini_api_keys") or []):
+            k = str(k or "").strip()
+            if k and k not in keys:
+                keys.append(k)
+    except Exception:
+        pass
+    _keys_cache.update(mtime=mtime, keys=keys)
+    return keys
+
+
 def api_key(refresh: bool = False) -> str:
-    """The Gemini key from config/api_keys.json. Cached; never raises."""
+    """One Gemini key, rotating round-robin across all configured keys."""
     global _cached_key
     with _key_lock:
-        if _cached_key is not None and not refresh:
-            return _cached_key
-        try:
-            data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
-            _cached_key = str(data.get("gemini_api_key") or "")
-        except Exception:
+        keys = _all_keys(refresh)
+        if not keys:
             _cached_key = ""
+            return ""
+        i = _rr["i"] % len(keys)
+        _rr["i"] = (_rr["i"] + 1) % max(1, len(keys))
+        _cached_key = keys[i]
         return _cached_key
 
 

@@ -73,7 +73,38 @@ _DEFAULTS = {
     "minimize": True,               # hide ATLAS's window while working
     "vision_model": "gemini-2.5-flash",
     "refine_clicks": True,          # zoom in for a second, precise look before clicking
+    "speed": "equilibrado",         # preciso | equilibrado | turbo
 }
+
+# Speed profiles bundle the knobs that trade accuracy for latency. "refine":
+# always = zoom on every click; auto = only when the box is large (loose);
+# off = trust the first box. "skill_fast" runs a known skill with almost no
+# vision calls. These are overridden by any explicit per-key setting.
+_PROFILES = {
+    "preciso":     {"model": "gemini-2.5-flash",      "refine": "always",
+                    "settle": 3.0, "img": 1366, "fast": False, "skill_fast": False},
+    "equilibrado": {"model": "gemini-2.5-flash",      "refine": "auto",
+                    "settle": 1.4, "img": 1152, "fast": True,  "skill_fast": True},
+    "turbo":       {"model": "gemini-2.5-flash-lite", "refine": "off",
+                    "settle": 0.9, "img": 1024, "fast": True,  "skill_fast": True},
+}
+
+# The knobs in force for the running task (set at task start from the profile).
+_RUN = dict(_PROFILES["equilibrado"])
+
+
+def _apply_profile(cfg: dict) -> dict:
+    prof = _PROFILES.get(str(cfg.get("speed") or "equilibrado").lower(), _PROFILES["equilibrado"])
+    eff = dict(prof)
+    # Explicit settings still win, so power users can tune a single knob.
+    if cfg.get("vision_model"):
+        eff["model"] = cfg["vision_model"]
+    if "refine_clicks" in cfg and cfg.get("speed") is None:
+        eff["refine"] = "always" if cfg["refine_clicks"] else "off"
+    if cfg.get("fast_mode"):
+        eff["fast"] = True
+    _RUN.clear(); _RUN.update(eff)
+    return eff
 
 _stop = threading.Event()
 _default_player = {"ui": None}
@@ -98,6 +129,13 @@ def _settings() -> dict:
     out = {**_DEFAULTS, **saved}
     if ov:
         out["screen_override"] = ov
+    try:
+        from memory.config_manager import get_feature
+        sp = get_feature("task_agent_speed", "")
+        if sp:
+            out["speed"] = sp
+    except Exception:
+        pass
     return out
 
 
@@ -176,8 +214,8 @@ def _screenshot() -> tuple[bytes, str]:
     _last_img["img"] = img
     _last_img["size"] = img.size          # (W, H) in IMAGE pixels
     small = img.convert("L").resize((48, 27))
-    fp = hashlib.md5(bytes(p // 12 for p in small.getdata())).hexdigest()
-    return _encode(img), fp
+    fp = hashlib.md5(bytes(px // 12 for px in small.getdata())).hexdigest()
+    return _encode(img, int(_RUN.get("img", 1366))), fp
 
 
 def _fingerprint() -> str:
@@ -195,8 +233,11 @@ def _active_title() -> str:
         return ""
 
 
-def _settle(max_wait: float = 3.0) -> None:
-    """Return once the screen has stopped changing (two equal looks in a row)."""
+def _settle(max_wait: float = None) -> None:
+    """Return once the screen has stopped changing (two equal looks in a row).
+    The cap comes from the speed profile unless a caller asks for a specific one."""
+    if max_wait is None:
+        max_wait = float(_RUN.get("settle", 1.4))
     end = time.monotonic() + max_wait
     prev = _fingerprint()
     while time.monotonic() < end and not _stop.is_set():
@@ -466,6 +507,26 @@ def _safe_copy(text):
         pass
 
 
+def _should_refine(a: dict) -> bool:
+    """Whether to spend a second (zoom) vision call to refine this click.
+    always: yes. off: no. auto: only when the box is large/loose (a tight box is
+    already precise), so most clicks cost one call instead of two."""
+    pol = _RUN.get("refine", "auto")
+    if pol == "off":
+        return False
+    if pol == "always":
+        return True
+    box = a.get("box") or a.get("box_2d")
+    if isinstance(box, (list, tuple)) and len(box) == 4:
+        try:
+            ymin, xmin, ymax, xmax = (float(v) for v in box)
+            area = abs((xmax - xmin) * (ymax - ymin)) / 1_000_000.0  # fraction of screen
+            return area > 0.02        # bigger than ~2% of the screen → refine
+        except Exception:
+            return True
+    return True                       # a bare point gave no size → refine to be safe
+
+
 def _execute(a: dict) -> str:
     t = str(a.get("type") or "").lower()
     if t == "open_app":
@@ -486,7 +547,7 @@ def _execute(a: dict) -> str:
         # throw the click off.
         ix, iy = _norm_to_img(norm[0], norm[1])
         target = str(a.get("target") or "")
-        if _settings().get("refine_clicks", True):
+        if _should_refine(a):
             ix, iy = _refine_click(target, ix, iy)
         px, py = _img_to_click(ix, iy)
         px, py = _snap_windows(px, py)
@@ -685,11 +746,102 @@ def run_sync(goal: str, player=None, _claimed: bool = False) -> tuple[str, str]:
         _run_lock.release()
 
 
+def _extract_params(goal: str, skill: dict) -> dict:
+    """Fill the skill's {params} from the user's goal with ONE cheap text call
+    (no vision). Returns {param: value}."""
+    params = skill.get("params") or []
+    if not params:
+        return {}
+    try:
+        raw = _llm_text(
+            f'Extract these fields from the user request. Reply ONLY JSON '
+            f'{{{", ".join(repr(p) + ": value" for p in params)}}}. '
+            f'Use the user\'s own words; leave "" if absent.\n\nREQUEST: {goal}')
+        data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+        return {p: str(data.get(p, "")) for p in params}
+    except Exception:
+        return {p: "" for p in params}
+
+
+def _locate(target: str, model: str) -> tuple[float, float] | None:
+    """One point-only vision call: where is `target` on the current screen?
+    Returns screenshot-pixel (ix, iy) or None if not found. Cheaper than a full
+    _decide because it asks for a single point, nothing else."""
+    from google.genai import types
+    from core import gemini
+    shot, _ = _screenshot()
+    try:
+        data = gemini.as_json(
+            [types.Part.from_bytes(data=shot, mime_type="image/jpeg"),
+             f'Point at the exact centre of "{target}" on this screen. Reply ONLY '
+             f'{{"point": [y, x]}} normalised 0-1000, or {{"point": null}} if it is '
+             f'not visible.'],
+            tier=model, timeout_ms=20_000)
+        pt = (data or {}).get("point")
+        if isinstance(pt, (list, tuple)) and len(pt) == 2:
+            return _norm_to_img(float(pt[1]), float(pt[0]))
+    except Exception:
+        pass
+    return None
+
+
+def _run_skill_fast(goal: str, skill: dict, model: str,
+                    done: list) -> tuple[str, str] | None:
+    """Run a KNOWN skill with almost no vision calls: keyboard/app steps go
+    straight through; only a click asks the model where its target is. Returns a
+    result, or None to fall back to the full look-act-check loop (e.g. a click
+    target wasn't found — the app probably changed)."""
+    values = _extract_params(goal, skill)
+    _emit(f"modo veloz: habilidade '{skill['name']}'"
+          + (f" · {values}" if values else ""))
+    for st in skill.get("steps", []):
+        if _stop.is_set():
+            return "stopped", "Parei a tarefa como você pediu."
+        kind = st.get("kind")
+        arg = str(st.get("arg") or "")
+        for k, v in values.items():
+            arg = arg.replace("{%s}" % k, v)
+        if kind in ("open_app", "open_url", "hotkey", "press", "type", "type_enter", "wait"):
+            act = {"type": kind}
+            if kind == "open_app":
+                act["name"] = arg
+            elif kind == "open_url":
+                act["url"] = arg
+            elif kind == "hotkey":
+                act["keys"] = [p.strip() for p in arg.replace("+", " ").split()]
+            elif kind == "press":
+                act["key"] = arg
+            elif kind in ("type", "type_enter"):
+                act["text"] = arg
+                act["enter"] = (kind == "type_enter")
+                act["type"] = "type"
+            elif kind == "wait":
+                act["seconds"] = 1.5
+            _execute(act)
+            done.append(act)
+            activity.record("agent_step", f"(veloz) {kind}: {arg}")
+        elif kind in ("click", "double_click", "right_click"):
+            target = str(st.get("target") or arg)
+            loc = _locate(target, model)
+            if loc is None:
+                _emit(f"não achei '{target}' — voltando ao modo cuidadoso", "warn")
+                return None          # fall back to the full loop from here
+            px, py = _img_to_click(*loc)
+            px, py = _snap_windows(px, py)
+            _do_click(kind, px, py)
+            _settle()
+            done.append({"type": kind, "target": target})
+            activity.record("agent_step", f"(veloz) {kind}: {target}")
+    return "done", f"Feito (modo veloz): {goal}"
+
+
 def _loop(goal: str, cfg: dict, skill: dict | None = None,
           done: list | None = None) -> tuple[str, str]:
     deadline = time.monotonic() + float(cfg.get("max_minutes") or 5) * 60
     max_steps = int(cfg.get("max_steps") or 30)
-    model = str(cfg.get("vision_model") or "gemini-2.5-flash")
+    eff = _apply_profile(cfg)
+    model = eff["model"]
+    cfg = {**cfg, "fast_mode": eff["fast"]}   # profile drives batching
     done = done if done is not None else []
 
     ok_in, diag = _ensure_input()
@@ -700,6 +852,17 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
     activity.record("task", f"comecei: {goal}")
     if skill:
         from core import skills
+        # Fast-path: run the known skill with almost no vision calls. If it is
+        # unsure (a target vanished), it returns None and we drop into the full
+        # loop from the current screen.
+        if eff.get("skill_fast"):
+            try:
+                fast = _run_skill_fast(goal, skill, model, done)
+            except Exception as e:
+                _emit(f"modo veloz falhou ({e}); indo pelo modo cuidadoso", "warn")
+                fast = None
+            if fast is not None:
+                return fast
         plan = skills.steps_as_plan(skill)
         _emit(f"seguindo a habilidade '{skill['name']}' ({len(plan)} passos)")
     else:

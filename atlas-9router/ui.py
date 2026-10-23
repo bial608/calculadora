@@ -4619,6 +4619,7 @@ class DevConsole(QWidget):
                 "/stop              para a tarefa em andamento (ou ESC)",
                 "/diag              testa se o mouse funciona + escala da tela",
                 "/setres 1440x900   força a resolução do alvo (se o /diag mostrar errado)",
+                "/speed turbo       velocidade das tarefas (preciso|equilibrado|turbo)",
                 "/kill              liga/desliga o kill switch (Ctrl+Shift+Alt+K)",
                 "/health            saúde dos componentes",
                 "/audit             últimas ações registradas",
@@ -4670,6 +4671,15 @@ class DevConsole(QWidget):
         elif name == "/diag":
             from actions import task_agent
             self._bg(lambda: (info(task_agent.input_diag())))
+        elif name == "/speed":
+            from memory import config_manager as cm
+            a2=arg.strip().lower()
+            if a2 in ("preciso","equilibrado","turbo"):
+                cm.save_feature("task_agent_speed", a2); ok_(f"velocidade: {a2}")
+            else:
+                from actions import task_agent as _ta
+                info("velocidade atual: "+(cm.get_feature("task_agent_speed","") or "equilibrado")
+                     +" · use /speed preciso|equilibrado|turbo")
         elif name == "/setres":
             from memory import config_manager as cm
             a2 = arg.strip().lower()
@@ -4799,10 +4809,35 @@ class FeaturesOverlay(_HudOverlay):
         head("✋  INTERROMPER FALANDO")
         toggle("barge_in", "Posso te cortar quando você falar por cima", self._feat.get("barge_in", True))
 
-        # ── Fast mode ────────────────────────────────────────────────────────
-        head("⚡  MODO RÁPIDO")
-        toggle("fast_mode", "Fazer vários passos por vez nas tarefas (mais rápido)",
-               self._feat.get("fast_mode", False))
+        # ── Velocidade das tarefas ───────────────────────────────────────────
+        head("⚡  VELOCIDADE DAS TAREFAS")
+        from memory import config_manager as _cm0
+        self._speed = _ScrollSafeCombo()
+        for lbl_, val_ in (("Preciso — mais devagar, máxima precisão", "preciso"),
+                           ("Equilibrado — mais rápido, boa precisão", "equilibrado"),
+                           ("Turbo — o mais rápido (pode errar mais)", "turbo")):
+            self._speed.addItem(lbl_, val_)
+        _cur = _cm0.get_feature("task_agent_speed", "") or "equilibrado"
+        self._speed.setCurrentIndex({"preciso": 0, "equilibrado": 1, "turbo": 2}.get(_cur, 1))
+        self._speed.setFont(_mono(8)); self._speed.setStyleSheet(self._combo_css())
+        root.addWidget(self._speed)
+        _sp = QLabel("Tarefas que o ATLAS já aprendeu rodam quase sem olhar a tela "
+                     "(bem mais rápido) no Equilibrado e no Turbo.")
+        _sp.setFont(_mono(7)); _sp.setWordWrap(True); _sp.setStyleSheet(f"color: {C.TEXT_DIM};")
+        root.addWidget(_sp)
+        _kl = QLabel("API keys extras do Gemini (uma por linha) — evita travar por limite")
+        _kl.setFont(_mono(7)); _kl.setStyleSheet(f"color: {C.TEXT_DIM};"); root.addWidget(_kl)
+        self._keys = QTextEdit()
+        self._keys.setFont(_mono(8)); self._keys.setFixedHeight(46)
+        self._keys.setStyleSheet(f"QTextEdit {{ background:#000d08; color:{_TERM_GREEN}; "
+                                 f"border:1px solid #0f3d2a; border-radius:3px; padding:3px; }}")
+        try:
+            import json as _json
+            _top = _json.loads((_cm0.CONFIG_FILE).read_text(encoding="utf-8"))
+            self._keys.setPlainText("\n".join(_top.get("gemini_api_keys") or []))
+        except Exception:
+            pass
+        root.addWidget(self._keys)
 
         # ── Background alerts ─────────────────────────────────────────────────
         head("🔔  AVISOS EM BACKGROUND")
@@ -4945,6 +4980,10 @@ class FeaturesOverlay(_HudOverlay):
         except ValueError:
             b = 0.0
         cm._patch_config(daily_budget_usd=b)
+        # Velocidade e keys extras.
+        cm.save_feature("task_agent_speed", self._speed.currentData())
+        keys = [k.strip() for k in self._keys.toPlainText().splitlines() if k.strip()]
+        cm._patch_config(gemini_api_keys=keys)
         wk = dict(self._wk)
         wk["engine"] = self._engine.currentData()
         wk["phrase"] = self._pv_phrase.text().strip() or "Ei ATLAS"
