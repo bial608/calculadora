@@ -4617,6 +4617,7 @@ class DevConsole(QWidget):
                 "/textonly on|off   só texto (decodifica mídia) ou multimodal",
                 "/tarefa <objetivo> executa uma tarefa completa sozinho",
                 "/stop              para a tarefa em andamento (ou ESC)",
+                "/diag              testa se o mouse funciona + escala da tela",
                 "/kill              liga/desliga o kill switch (Ctrl+Shift+Alt+K)",
                 "/health            saúde dos componentes",
                 "/audit             últimas ações registradas",
@@ -4665,6 +4666,9 @@ class DevConsole(QWidget):
             else:
                 from actions import task_agent
                 ok_(task_agent.executar_tarefa({"goal": arg}, player=None)[:120])
+        elif name == "/diag":
+            from actions import task_agent
+            self._bg(lambda: (info(task_agent.input_diag())))
         elif name == "/stop":
             from actions import task_agent
             (ok_ if task_agent.stop() else info)("parando a tarefa…" if task_agent.busy()

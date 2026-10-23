@@ -56,6 +56,17 @@ pyperclip = LazyModule("pyperclip")
 _OS = platform.system()             # Windows | Darwin | Linux
 _OS_NAME = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}.get(_OS, _OS)
 
+# Make clicks land right on scaled displays from the very first screenshot.
+try:
+    import ctypes as _ctypes
+    if _OS == "Windows":
+        try:
+            _ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            _ctypes.windll.user32.SetProcessDPIAware()
+except Exception:
+    pass
+
 _DEFAULTS = {
     "max_steps": 30,
     "max_minutes": 5,
@@ -135,13 +146,31 @@ def _encode(img, max_side: int = 1366, quality: int = 80) -> bytes:
 
 
 # The most recent full-res screenshot, so a click can zoom into it for accuracy.
-_last_img = {"img": None}
+_last_img = {"img": None, "size": None}
+
+
+def _set_dpi_aware() -> None:
+    """Windows: make this process DPI-aware so the screenshot, the reported
+    screen size and the mouse all use the SAME physical pixels. Without this, on
+    a laptop at 125%/150% scaling the three disagree and every click lands off.
+    Safe to call once; ignored off Windows."""
+    if _OS != "Windows":
+        return
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor v2
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 def _screenshot() -> tuple[bytes, str]:
     """(jpeg bytes for the model, fingerprint) of the primary screen."""
     img = _grab_image()
     _last_img["img"] = img
+    _last_img["size"] = img.size          # (W, H) in IMAGE pixels
     small = img.convert("L").resize((48, 27))
     fp = hashlib.md5(bytes(p // 12 for p in small.getdata())).hexdigest()
     return _encode(img), fp
@@ -190,8 +219,39 @@ def _clamp(v: float) -> float:
     return min(max(float(v), 0.0), 1000.0)
 
 
-def _norm_to_px(nx: float, ny: float, w: int, h: int) -> tuple[int, int]:
-    return int(_clamp(nx) / 1000.0 * (w - 1)), int(_clamp(ny) / 1000.0 * (h - 1))
+def _img_size() -> tuple[int, int]:
+    s = _last_img.get("size")
+    if s:
+        return s
+    img = _last_img.get("img")
+    return img.size if img is not None else (1920, 1080)
+
+
+def _click_size() -> tuple[int, int]:
+    """The mouse's own coordinate space (what pyautogui.click expects)."""
+    try:
+        w, h = pyautogui.size()
+        return int(w), int(h)
+    except Exception:
+        return _img_size()
+
+
+def _norm_to_img(nx: float, ny: float) -> tuple[float, float]:
+    """normalised 0-1000 → pixel in the SCREENSHOT the model looked at."""
+    w, h = _img_size()
+    return _clamp(nx) / 1000.0 * (w - 1), _clamp(ny) / 1000.0 * (h - 1)
+
+
+def _img_to_click(ix: float, iy: float) -> tuple[int, int]:
+    """screenshot pixel → mouse coordinate. This single conversion is what makes
+    clicks land right on a scaled / high-DPI / different-resolution screen: the
+    model points in image space, the mouse moves in its own space, and the ratio
+    between the two is applied exactly once."""
+    iw, ih = _img_size()
+    cw, ch = _click_size()
+    cx = int(round(ix * cw / max(1, iw)))
+    cy = int(round(iy * ch / max(1, ih)))
+    return max(0, min(cw - 1, cx)), max(0, min(ch - 1, cy))
 
 
 def _target_norm(a: dict) -> tuple[float, float] | None:
@@ -214,22 +274,22 @@ def _target_norm(a: dict) -> tuple[float, float] | None:
     return None
 
 
-def _refine_click(target: str, base_px: int, base_py: int, w: int, h: int) -> tuple[int, int]:
-    """Second look, zoomed in: crop a region at full resolution around the first
-    guess, enlarge it and ask Gemini for the precise point INSIDE the crop. On a
-    crop the element is big, so the answer is far more accurate than on the whole
-    screen. Any failure keeps the first guess."""
-    img = _last_img["img"]
+def _refine_click(target: str, ix: float, iy: float) -> tuple[float, float]:
+    """Second look, zoomed in — ALL in screenshot-pixel space. Crops a region
+    around the first guess, enlarges it and asks Gemini for the precise point
+    inside the crop. On a crop the element is big, so the answer is far more
+    accurate. Any failure keeps the first guess."""
+    img = _last_img.get("img")
     if img is None or not target:
-        return base_px, base_py
+        return ix, iy
     try:
         from google.genai import types
         from core import gemini
-        cw, ch = int(w * 0.30), int(h * 0.30)       # 30% window around the guess
-        left, top = max(0, base_px - cw // 2), max(0, base_py - ch // 2)
-        right, bottom = min(w, left + cw), min(h, top + ch)
-        left, top = right - cw, bottom - ch
-        crop = img.crop((left, top, right, bottom))
+        iw, ih = _img_size()
+        cw, ch = int(iw * 0.30), int(ih * 0.30)       # 30% window around the guess
+        left = int(min(max(0, ix - cw / 2), iw - cw))
+        top = int(min(max(0, iy - ch / 2), ih - ch))
+        crop = img.crop((left, top, left + cw, top + ch))
         big = crop.resize((cw * 2, ch * 2))
         data = gemini.as_json(
             [types.Part.from_bytes(data=_encode(big, 1100, 85), mime_type="image/jpeg"),
@@ -240,12 +300,10 @@ def _refine_click(target: str, base_px: int, base_py: int, w: int, h: int) -> tu
         pt = (data or {}).get("point")
         if isinstance(pt, (list, tuple)) and len(pt) == 2:
             ny, nx = float(pt[0]), float(pt[1])
-            px = left + int(_clamp(nx) / 1000.0 * cw)
-            py = top + int(_clamp(ny) / 1000.0 * ch)
-            return px, py
+            return left + _clamp(nx) / 1000.0 * cw, top + _clamp(ny) / 1000.0 * ch
     except Exception as e:
         _emit(f"refino do clique falhou ({e}); usando a 1ª posição", "warn")
-    return base_px, base_py
+    return ix, iy
 
 
 def _snap_windows(px: int, py: int) -> tuple[int, int]:
@@ -263,6 +321,79 @@ def _snap_windows(px: int, py: int) -> tuple[int, int]:
     except Exception:
         pass
     return px, py
+
+
+def _pointer_at(px: int, py: int, tol: int = 4) -> tuple[bool, str]:
+    """True if the mouse is now within `tol` px of (px, py). Proves the move
+    actually happened, which is how we catch 'said clicked but didn't'."""
+    try:
+        cx, cy = pyautogui.position()
+    except Exception as e:
+        return False, f"não consegui ler a posição do mouse ({e})"
+    if abs(cx - px) <= tol and abs(cy - py) <= tol:
+        return True, "ok"
+    return False, f"mouse ficou em {cx},{cy}"
+
+
+def input_diag() -> str:
+    """One-shot check that we can actually move the mouse. Used by /diag and at
+    the start of a task, so the user gets a clear reason instead of silent
+    wrong clicks."""
+    try:
+        import pyautogui as _pg
+    except Exception as e:
+        return f"pyautogui não disponível ({e}) — instale com: pip install pyautogui"
+    try:
+        cw, ch = _pg.size()
+    except Exception as e:
+        return f"não consigo ler o tamanho da tela ({e})"
+    try:
+        orig = _pg.position()
+    except Exception:
+        orig = None
+    target = (cw // 2, ch // 2)
+    moved = False
+    try:
+        _pg.moveTo(*target, duration=0)
+        time.sleep(0.05)
+        cx, cy = _pg.position()
+        moved = abs(cx - target[0]) <= 4 and abs(cy - target[1]) <= 4
+    except Exception as e:
+        return f"o mouse não se moveu ({e})"
+    finally:
+        if orig:
+            try:
+                _pg.moveTo(*orig, duration=0)
+            except Exception:
+                pass
+    iw, ih = _img_size()
+    dpi = ""
+    if (iw, ih) != (cw, ch):
+        dpi = (f"  ·  print {iw}x{ih} ≠ mouse {cw}x{ch} → corrigido pela conversão "
+               f"(razão {cw / max(1, iw):.3f})")
+    if not moved:
+        plat = {"Linux": "no Linux em Wayland o mouse não pode ser controlado — use "
+                         "uma sessão X11 (Xorg) no login",
+                "Darwin": "no macOS libere Preferências → Privacidade → Acessibilidade "
+                          "para o ATLAS/Python",
+                "Windows": "rode o ATLAS como administrador se a janela-alvo for de admin"}
+        return f"⛔ o mouse NÃO se move neste sistema. {plat.get(_OS, '')}{dpi}"
+    return f"✔ mouse ok (tela {cw}x{ch}){dpi}"
+
+
+# Checked once per session so a task doesn't start blind.
+_input_checked = {"ok": None, "msg": ""}
+
+
+def _ensure_input() -> tuple[bool, str]:
+    if _input_checked["ok"] is None:
+        _set_dpi_aware()
+        _screenshot()                 # populate image size before diagnosing
+        msg = input_diag()
+        _input_checked["ok"] = msg.startswith("✔")
+        _input_checked["msg"] = msg
+        _emit(msg, "ok" if _input_checked["ok"] else "error")
+    return _input_checked["ok"], _input_checked["msg"]
 
 
 def _paste(text: str) -> None:
@@ -299,16 +430,26 @@ def _execute(a: dict) -> str:
         _settle(5.0)
         return "url opened"
     if t in ("click", "double_click", "right_click"):
-        w, h = pyautogui.size()
         norm = _target_norm(a)
         if norm is None:
             return "no coordinates given for the click"
-        px, py = _norm_to_px(norm[0], norm[1], w, h)
+        # Geometry entirely in screenshot pixels, converted to the mouse's own
+        # coordinate space exactly once — so DPI / resolution scaling cannot
+        # throw the click off.
+        ix, iy = _norm_to_img(norm[0], norm[1])
         target = str(a.get("target") or "")
         if _settings().get("refine_clicks", True):
-            px, py = _refine_click(target, px, py, w, h)
+            ix, iy = _refine_click(target, ix, iy)
+        px, py = _img_to_click(ix, iy)
         px, py = _snap_windows(px, py)
-        pyautogui.moveTo(px, py, duration=0.15)
+        pyautogui.moveTo(px, py, duration=0.12)
+        # Did the pointer actually land where we aimed? If not, the OS is not
+        # letting us move the mouse (Wayland, or macOS without Accessibility) —
+        # report that honestly instead of claiming a click that never happened.
+        ok, where = _pointer_at(px, py)
+        if not ok:
+            return (f"⚠ tentei clicar em {px},{py} ({target}) mas o mouse não foi "
+                    f"até lá ({where}). Provável bloqueio do sistema — veja /diag.")
         if t == "double_click":
             pyautogui.doubleClick(px, py)
         elif t == "right_click":
@@ -511,6 +652,10 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
     model = str(cfg.get("vision_model") or "gemini-2.5-flash")
     done = done if done is not None else []
 
+    ok_in, diag = _ensure_input()
+    if not ok_in:
+        return "failed", ("Não consigo controlar o mouse/teclado neste sistema, então "
+                          "não dá para fazer a tarefa. " + diag)
     _emit(f"tarefa: {goal}")
     activity.record("task", f"comecei: {goal}")
     if skill:
@@ -784,6 +929,9 @@ def executar_tarefa(parameters: dict, player=None) -> str:
         if not busy():
             return "No task is running."
         return f"Running '{_state['goal']}', step {_state['step']}."
+    if action in ("diag", "diagnostico", "diagnóstico"):
+        _set_dpi_aware(); _screenshot()
+        return input_diag()
     goal = str(parameters.get("goal") or "").strip()
     if not goal:
         return outcome.failed("executar_tarefa", "no goal was given")
