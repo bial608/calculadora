@@ -4861,6 +4861,19 @@ class FeaturesOverlay(_HudOverlay):
                      "o gemini-2.5-pro aqui (aponta melhor onde clicar).")
         _vm.setFont(_mono(7)); _vm.setWordWrap(True); _vm.setStyleSheet(f"color: {C.TEXT_DIM};")
         root.addWidget(_vm)
+        # Persistência: confere o resultado e insiste até conseguir.
+        self._persist = _ScrollSafeCombo()
+        for lbl_, val_ in (("Insistente — confere e tenta outro jeito até conseguir", "insistente"),
+                           ("Normal — tenta menos antes de me chamar", "normal")):
+            self._persist.addItem(lbl_, val_)
+        _cp = _cm0.get_feature("task_agent_persist", "") or "insistente"
+        self._persist.setCurrentIndex(0 if _cp != "normal" else 1)
+        self._persist.setFont(_mono(8)); self._persist.setStyleSheet(self._combo_css())
+        root.addWidget(self._persist)
+        _pl = QLabel("No Insistente, quando acha que terminou ele OLHA a tela pra confirmar; "
+                     "se não deu certo, tenta outro caminho (até 10 min) antes de te chamar.")
+        _pl.setFont(_mono(7)); _pl.setWordWrap(True); _pl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        root.addWidget(_pl)
         _kl = QLabel("API keys extras do Gemini (uma por linha) — evita travar por limite")
         _kl.setFont(_mono(7)); _kl.setStyleSheet(f"color: {C.TEXT_DIM};"); root.addWidget(_kl)
         self._keys = QTextEdit()
@@ -5026,6 +5039,7 @@ class FeaturesOverlay(_HudOverlay):
         _vt = self._vmodel.currentText().strip()
         vmodel = _vd if _vd else (_vt if ("gemini" in _vt.lower() and " " not in _vt) else "")
         cm.save_feature("task_agent_vmodel", vmodel)
+        cm.save_feature("task_agent_persist", self._persist.currentData())
         keys = [k.strip() for k in self._keys.toPlainText().splitlines() if k.strip()]
         cm._patch_config(gemini_api_keys=keys)
         wk = dict(self._wk)

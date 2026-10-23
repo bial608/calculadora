@@ -68,8 +68,7 @@ except Exception:
     pass
 
 _DEFAULTS = {
-    "max_steps": 30,
-    "max_minutes": 5,
+    "persistence": "insistente",    # normal | insistente (quanto ele insiste)
     "minimize": True,               # hide ATLAS's window while working
     "vision_model": "gemini-2.5-flash",
     "refine_clicks": True,          # zoom in for a second, precise look before clicking
@@ -137,6 +136,9 @@ def _settings() -> dict:
         vm = get_feature("task_agent_vmodel", "")
         if vm:
             out["vision_model"] = vm
+        pr = get_feature("task_agent_persist", "")
+        if pr:
+            out["persistence"] = pr
     except Exception:
         pass
     return out
@@ -838,10 +840,41 @@ def _run_skill_fast(goal: str, skill: dict, model: str,
     return "done", f"Feito (modo veloz): {goal}"
 
 
+# How hard ATLAS tries before giving up. Insistente keeps trying other ways;
+# the kill switch, the guard and the time budget are the safety net.
+_PERSIST = {
+    "normal":     {"steps": 30, "minutes": 5,  "replans": 2},
+    "insistente": {"steps": 60, "minutes": 10, "replans": 5},
+}
+
+
+def _verify_goal(goal: str, model: str) -> dict:
+    """Look at the screen and judge whether the GOAL is actually accomplished —
+    a separate check so a premature 'done' from the step model is caught. Cheap:
+    one call, only when the agent believes it is finished."""
+    from google.genai import types
+    from core import gemini
+    shot, _ = _screenshot()
+    try:
+        data = gemini.as_json(
+            [types.Part.from_bytes(data=shot, mime_type="image/jpeg"),
+             f'The user asked: "{goal}". Look at the screen NOW. Was it actually '
+             f'accomplished and is the result visible? Reply ONLY '
+             f'{{"verified": true or false, "evidence": "what on screen proves it", '
+             f'"next": "if not done, the single next action to get there"}}.'],
+            tier=model, timeout_ms=30_000)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _loop(goal: str, cfg: dict, skill: dict | None = None,
           done: list | None = None) -> tuple[str, str]:
-    deadline = time.monotonic() + float(cfg.get("max_minutes") or 5) * 60
-    max_steps = int(cfg.get("max_steps") or 30)
+    pers = _PERSIST.get(str(cfg.get("persistence") or "insistente").lower(),
+                        _PERSIST["insistente"])
+    deadline = time.monotonic() + float(cfg.get("max_minutes") or pers["minutes"]) * 60
+    max_steps = int(cfg.get("max_steps") or pers["steps"])
+    max_replans = int(pers["replans"])
     eff = _apply_profile(cfg)
     model = eff["model"]
     cfg = {**cfg, "fast_mode": eff["fast"]}   # profile drives batching
@@ -873,13 +906,14 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
     _emit("plano: " + " │ ".join(f"{i}. {s}" for i, s in enumerate(plan, 1)))
 
     history: list[str] = []
-    last_sig, stuck, replans, fails = "", 0, 0, 0
+    last_sig, stuck, replans, fails, false_done = "", 0, 0, 0, 0
     for step in range(1, max_steps + 1):
         if _stop.is_set():
             return "stopped", "Parei a tarefa como você pediu."
         if time.monotonic() > deadline:
-            return "failed", f"Passou do tempo limite. Fiz {step - 1} passos: " + \
-                   (history[-1] if history else "")
+            return "failed", (f"Passou do tempo que eu tinha ({pers['minutes']} min). "
+                              f"Cheguei até: " + (history[-1] if history else "o começo")
+                              + ". Quer continuar ou fazer junto?")
         _state["step"] = step
         shot, fp = _screenshot()
         d = _decide(goal, plan, history, shot, model)
@@ -892,10 +926,41 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
         fails = 0
         status = str(d.get("status") or "continue").lower()
         screen = str(d.get("screen") or "")[:160]
-        if status in ("done", "failed", "needs_user"):
-            summary = str(d.get("summary") or d.get("why") or status)
-            _emit(f"{status}: {summary}", "ok" if status == "done" else "warn")
+        summary = str(d.get("summary") or d.get("why") or status)
+
+        if status == "needs_user":
+            _emit(f"preciso de você: {summary}", "warn")
             return status, summary
+
+        if status == "done":
+            # Don't trust it blindly — look again and confirm the GOAL happened.
+            v = _verify_goal(goal, model)
+            if v.get("verified"):
+                _emit(f"confirmado: {v.get('evidence') or summary}", "ok")
+                return "done", str(d.get("summary") or v.get("evidence") or "Feito.")
+            false_done += 1
+            nxt = str(v.get("next") or "ainda falta algo; continue")
+            _emit(f"achei que terminei, mas a verificação diz que não: "
+                  f"{v.get('evidence','')} → {nxt}", "warn")
+            history.append(f"VERIFIQUEI: ainda NÃO concluído — {v.get('evidence','')}. "
+                           f"Próximo: {nxt}")
+            if false_done >= 3:
+                return "failed", ("Tentei bastante mas não consegui confirmar que ficou "
+                                  f"pronto. O que falta: {nxt}. Quer fazer junto?")
+            plan = _plan(goal, extra=f"NOT done yet. {nxt}. Current screen: {screen}")
+            continue
+
+        if status == "failed":
+            # Persistência: antes de desistir, tenta outro caminho.
+            if replans < max_replans:
+                replans += 1
+                _emit(f"o modelo travou ({summary}) — tentando outro caminho "
+                      f"({replans}/{max_replans})", "warn")
+                plan = _plan(goal, extra=(f"The attempt reported it cannot proceed: "
+                             f"{summary}. Current screen: {screen}. Try a DIFFERENT way."))
+                continue
+            return "failed", (f"{summary} Tentei {max_replans} caminhos diferentes e não "
+                              f"consegui. Quer fazer junto?")
 
         action = d.get("action") or {}
         # Fast mode: run a short batch the model is sure of before looking again.
@@ -913,13 +978,14 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
         stuck = stuck + 1 if sig == last_sig else 0
         last_sig = sig
         if stuck >= 1:
-            if replans >= 2:
-                return "failed", ("Fiquei preso repetindo a mesma ação. Última tela: "
-                                  f"{screen}")
+            if replans >= max_replans:
+                return "failed", ("Fiquei preso repetindo a mesma ação sem avançar. "
+                                  f"Última tela: {screen}. Quer fazer junto?")
             replans += 1
-            _emit("sem progresso — pedindo um plano novo", "warn")
+            _emit(f"sem progresso — pensando outro caminho ({replans}/{max_replans})", "warn")
             plan = _plan(goal, extra=("The previous attempt is stuck. Current screen: "
-                                      f"{screen}\nActions so far:\n" + "\n".join(history[-8:])))
+                                      f"{screen}\nActions so far:\n" + "\n".join(history[-8:])
+                                      + "\nTry a DIFFERENT approach."))
             _emit("novo plano: " + " │ ".join(plan))
             last_sig, stuck = "", 0
             continue
@@ -938,7 +1004,8 @@ def _loop(goal: str, cfg: dict, skill: dict | None = None,
                 f" → {results[-1] if results else '—'} · tela: {screen}")
         history.append(line)
         _emit(line)
-    return "failed", f"Cheguei ao limite de {max_steps} passos sem concluir."
+    return "failed", (f"Fiz {max_steps} passos e não consegui confirmar que terminou. "
+                      f"Quer que a gente faça junto?")
 
 
 _GENERALISE = """A desktop task just succeeded. Turn the actions ATLAS performed into a
