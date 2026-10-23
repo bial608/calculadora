@@ -134,6 +134,9 @@ def _settings() -> dict:
         sp = get_feature("task_agent_speed", "")
         if sp:
             out["speed"] = sp
+        vm = get_feature("task_agent_vmodel", "")
+        if vm:
+            out["vision_model"] = vm
     except Exception:
         pass
     return out

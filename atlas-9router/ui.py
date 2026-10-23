@@ -4840,6 +4840,27 @@ class FeaturesOverlay(_HudOverlay):
                      "(bem mais rápido) no Equilibrado e no Turbo.")
         _sp.setFont(_mono(7)); _sp.setWordWrap(True); _sp.setStyleSheet(f"color: {C.TEXT_DIM};")
         root.addWidget(_sp)
+        # Vision model = accuracy of the clicks. A stronger model points better.
+        head("🎯  PRECISÃO DOS CLIQUES")
+        self._vmodel = _ScrollSafeCombo()
+        self._vmodel.setEditable(True)
+        for lbl_, val_ in (("Automático (segue o perfil de velocidade)", ""),
+                           ("gemini-2.5-flash — rápido (padrão)", "gemini-2.5-flash"),
+                           ("gemini-2.5-flash-lite — mais rápido", "gemini-2.5-flash-lite"),
+                           ("gemini-2.5-pro — ACERTA MAIS (mais lento/caro)", "gemini-2.5-pro")):
+            self._vmodel.addItem(lbl_, val_)
+        _cv = _cm0.get_feature("task_agent_vmodel", "") or ""
+        _idx = next((i for i in range(self._vmodel.count())
+                     if self._vmodel.itemData(i) == _cv), 0)
+        self._vmodel.setCurrentIndex(_idx)
+        if _cv and _idx == 0:
+            self._vmodel.setCurrentText(_cv)
+        self._vmodel.setFont(_mono(8)); self._vmodel.setStyleSheet(self._combo_css())
+        root.addWidget(self._vmodel)
+        _vm = QLabel("Para ele ERRAR MENOS nos cliques: use o perfil Preciso e/ou escolha "
+                     "o gemini-2.5-pro aqui (aponta melhor onde clicar).")
+        _vm.setFont(_mono(7)); _vm.setWordWrap(True); _vm.setStyleSheet(f"color: {C.TEXT_DIM};")
+        root.addWidget(_vm)
         _kl = QLabel("API keys extras do Gemini (uma por linha) — evita travar por limite")
         _kl.setFont(_mono(7)); _kl.setStyleSheet(f"color: {C.TEXT_DIM};"); root.addWidget(_kl)
         self._keys = QTextEdit()
@@ -5001,6 +5022,10 @@ class FeaturesOverlay(_HudOverlay):
         cm._patch_config(daily_budget_usd=b)
         # Velocidade e keys extras.
         cm.save_feature("task_agent_speed", self._speed.currentData())
+        _vd = self._vmodel.currentData()
+        _vt = self._vmodel.currentText().strip()
+        vmodel = _vd if _vd else (_vt if ("gemini" in _vt.lower() and " " not in _vt) else "")
+        cm.save_feature("task_agent_vmodel", vmodel)
         keys = [k.strip() for k in self._keys.toPlainText().splitlines() if k.strip()]
         cm._patch_config(gemini_api_keys=keys)
         wk = dict(self._wk)

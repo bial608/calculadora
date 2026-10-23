@@ -96,7 +96,8 @@ _DEFAULTS = {
     "folder": "ATLAS",
     "auto_notes": True,
     "screenshots": True,
-    "interval_min": "3",
+    "interval_min": "3",        # compatibilidade; o valor usado é interval_sec
+    "interval_sec": "180",      # intervalo dos prints EM SEGUNDOS
     "analyze_screens": True,
     "delete_after_save": True,
     "retention_days": "14",
@@ -124,6 +125,23 @@ def _int(v, d):
         return d
 
 
+def _interval_seconds() -> int:
+    """Print interval in seconds. Reads the SAVED values (not the defaults) so an
+    old config in minutes still works: explicit interval_sec wins; else an
+    explicit interval_min (×60); else 180s. Floor of 15s so the disk and the
+    vision model are never hammered."""
+    try:
+        from memory.config_manager import get_plugin_config
+        saved = get_plugin_config(NS) or {}
+    except Exception:
+        saved = {}
+    if str(saved.get("interval_sec") or "").strip():
+        return max(15, _int(saved["interval_sec"], 180))
+    if str(saved.get("interval_min") or "").strip():
+        return max(15, _int(saved["interval_min"], 3) * 60)
+    return 180
+
+
 def _test_action(values: dict):
     vault = _resolve_vault(values.get("vault_path", ""))
     if vault is None:
@@ -146,7 +164,8 @@ PLUGIN_SETTINGS = {
         {"key": "auto_notes", "label": "Criar nota nova quando o assunto não existir", "type": "toggle",
          "default": True},
         {"key": "screenshots", "label": "Print da tela periódico", "type": "toggle", "default": True},
-        {"key": "interval_min", "label": "Intervalo dos prints (minutos)", "type": "text", "default": "3"},
+        {"key": "interval_sec", "label": "Intervalo dos prints (segundos) — ex.: 60, 180, 300",
+         "type": "text", "default": "180"},
         {"key": "analyze_screens", "label": "Descrever prints com o Gemini (estudar comportamento)",
          "type": "toggle", "default": True},
         {"key": "delete_after_save", "label": "Apagar o print depois de salvar o que aprendeu",
@@ -1011,7 +1030,7 @@ def _cleanup_prints() -> None:
 def _screen_loop() -> None:
     day = date.today()
     while not S.stop.is_set():
-        interval = _int(_cfg().get("interval_min"), 3) * 60
+        interval = _interval_seconds()
         if S.stop.wait(interval):
             break
         try:
@@ -1082,7 +1101,7 @@ def run(parameters: dict, player=None) -> str:
         cfg = _cfg()
         n = len(S.index.entries) if S.index else 0
         shots = "pausados" if (S.screens_paused or not cfg.get("screenshots", True)) \
-            else f"a cada {_int(cfg.get('interval_min'), 3)} min"
+            else f"a cada {_interval_seconds()}s"
         return f"Vault {S.vault.name}: {n} notas. Prints {shots}. Sessão: {S.turns} trocas."
     if action == "profile":
         return _profile_summary(3000) or "No profile yet — it is built from the first day of use."
