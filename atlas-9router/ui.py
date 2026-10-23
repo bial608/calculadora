@@ -4759,9 +4759,24 @@ class FeaturesOverlay(_HudOverlay):
             QLabel {{ background: transparent; }}
         """)
         self.setFixedWidth(self._OW)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 14, 20, 14)
+        # Scrollable body + a fixed button bar, so the panel never runs off the
+        # bottom of the screen (it has a lot of settings now).
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; }"
+            f"QScrollBar::handle:vertical {{ background: #0f3d2a; border-radius: 4px; }}")
+        _body = QWidget(); _body.setStyleSheet("background: transparent;")
+        root = QVBoxLayout(_body)
+        root.setContentsMargins(20, 14, 20, 10)
         root.setSpacing(5)
+        self._scroll.setWidget(_body)
+        outer.addWidget(self._scroll, stretch=1)
 
         hdr = QLabel("⚙  RECURSOS")
         hdr.setFont(_mono(11, True)); hdr.setStyleSheet(f"color: {_TERM_GREEN};")
@@ -4882,7 +4897,10 @@ class FeaturesOverlay(_HudOverlay):
         self._status = QLabel(" "); self._status.setFont(_mono(7)); self._status.setWordWrap(True)
         self._status.setStyleSheet(f"color: {C.TEXT_DIM};"); root.addWidget(self._status)
 
-        row = QHBoxLayout()
+        # Button bar: OUTSIDE the scroll area, always visible at the bottom.
+        bar = QWidget()
+        bar.setStyleSheet(f"background: #00120c; border-top: 1px solid #0f3d2a;")
+        row = QHBoxLayout(bar); row.setContentsMargins(16, 8, 16, 8)
         row.addStretch()
         cancel = QPushButton("CANCELAR"); cancel.setFont(_mono(8, True))
         cancel.setCursor(Qt.CursorShape.PointingHandCursor); cancel.setStyleSheet(self._btn_css())
@@ -4890,7 +4908,7 @@ class FeaturesOverlay(_HudOverlay):
         save = QPushButton("✔ SALVAR"); save.setFont(_mono(8, True))
         save.setCursor(Qt.CursorShape.PointingHandCursor); save.setStyleSheet(self._btn_css())
         save.clicked.connect(self._save); row.addWidget(save)
-        root.addLayout(row)
+        outer.addWidget(bar)
         self._sync_porcupine()
 
     def _combo_css(self) -> str:
@@ -4945,7 +4963,8 @@ class FeaturesOverlay(_HudOverlay):
             self._status.setStyleSheet(f"color: {_TERM_AMBER};")
         else:
             self._status.setText(" ")
-        self.adjustSize()
+        # No adjustSize(): the scroll area reflows the body; the overlay keeps
+        # its on-screen height so it can't grow past the window.
 
     def _save(self):
         from memory import config_manager as cm
@@ -5022,9 +5041,22 @@ class NineRouterOverlay(_HudOverlay):
             QLabel {{ background: transparent; }}
         """)
         self.setFixedWidth(self._OW)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; }"
+            f"QScrollBar::handle:vertical {{ background: #0f3d2a; border-radius: 4px; }}")
+        _body = QWidget(); _body.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(_body)
+        lay.setContentsMargins(20, 16, 20, 10)
         lay.setSpacing(6)
+        self._scroll.setWidget(_body)
+        outer.addWidget(self._scroll, stretch=1)
 
         hdr = QLabel("⌁  9ROUTER BRAIN")
         hdr.setFont(_mono(11, True))
@@ -5149,19 +5181,53 @@ class NineRouterOverlay(_HudOverlay):
         """)
         lay.addWidget(self._sys)
 
+        # ── Gemini (voz / Live) — a mesma chave que ouve e vê ────────────────
+        import json as _json
+        try:
+            _top = _json.loads(self._nr.CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            _top = {}
+        sep = QLabel("─────────  GEMINI (voz / Live)  ─────────")
+        sep.setFont(_mono(8, True)); sep.setStyleSheet(f"color: {_TERM_BLUE};")
+        sep.setContentsMargins(0, 8, 0, 0); lay.addWidget(sep)
+        g0 = QLabel("A chave que o Gemini usa para ouvir, ver e falar. "
+                    "Grátis em aistudio.google.com/apikey")
+        g0.setFont(_mono(7)); g0.setWordWrap(True); g0.setStyleSheet(f"color: {C.TEXT_DIM};")
+        lay.addWidget(g0)
+        lbl("GEMINI API KEY")
+        grow = QHBoxLayout()
+        self._gkey = edit(_top.get("gemini_api_key", ""), pw=True)
+        grow.addWidget(self._gkey, stretch=1)
+        geye = btn("👁", checkable=True); geye.setFixedWidth(36)
+        geye.toggled.connect(lambda on: self._gkey.setEchoMode(
+            QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
+        grow.addWidget(geye)
+        lay.addLayout(grow)
+        lbl("API KEYS EXTRAS DO GEMINI (uma por linha) — rodízio, evita travar por limite")
+        self._gkeys = QTextEdit()
+        self._gkeys.setFont(_mono(8)); self._gkeys.setFixedHeight(46)
+        self._gkeys.setPlainText("\n".join(_top.get("gemini_api_keys") or []))
+        self._gkeys.setStyleSheet(f"""
+            QTextEdit {{ background: #000d08; color: {_TERM_GREEN};
+                border: 1px solid #0f3d2a; border-radius: 3px; padding: 4px; }}
+        """)
+        lay.addWidget(self._gkeys)
+
         self._status = QLabel(" ")
         self._status.setWordWrap(True)
         self._status.setFont(_mono(8))
         self._status.setStyleSheet(f"color: {C.TEXT_DIM};")
         lay.addWidget(self._status)
 
-        row = QHBoxLayout()
+        bar = QWidget()
+        bar.setStyleSheet("background: #00120c; border-top: 1px solid #0f3d2a;")
+        row = QHBoxLayout(bar); row.setContentsMargins(16, 8, 16, 8)
         row.addWidget(btn("▶ TESTAR", self._test))
         row.addStretch()
         row.addWidget(btn("CANCELAR", self.close))
         save = btn("✔ SALVAR", self._save)
         row.addWidget(save)
-        lay.addLayout(row)
+        outer.addWidget(bar)
 
         self._test_sig.connect(self._on_test)
         self._models_sig.connect(self._on_models)
@@ -5287,6 +5353,20 @@ class NineRouterOverlay(_HudOverlay):
             self._say("✖ Escolha um modelo antes de ativar a ponte.", _TERM_RED)
             return
         self._nr.save_config(vals)
+        # Gemini key(s) — the same key the voice/vision uses — live at the top
+        # level of api_keys.json, next to everything else.
+        from memory import config_manager as cm
+        gk = self._gkey.text().strip()
+        gkeys = [k.strip() for k in self._gkeys.toPlainText().splitlines() if k.strip()]
+        fields = {"gemini_api_keys": gkeys}
+        if gk:
+            fields["gemini_api_key"] = gk
+        cm._patch_config(**fields)
+        try:
+            from core import gemini
+            gemini.api_key(refresh=True)      # drop the cached key
+        except Exception:
+            pass
         self.changed.emit()
         self.close()
 
@@ -7811,13 +7891,17 @@ class MainWindow(QMainWindow):
             self.on_voice_change()
 
     def _centre_overlay(self, ov) -> None:
-        """Place a floating overlay in the middle of the HUD and show it."""
+        """Place a floating overlay in the middle of the HUD and show it.
+        Height is capped to the window so a tall panel never runs off-screen —
+        scrollable panels (FeaturesOverlay) then show a scrollbar."""
         cw = self.centralWidget()
         ov.adjustSize()
+        w = min(ov.width(), cw.width() - 16)
+        h = min(ov.height(), cw.height() - 16)
         ov.setGeometry(
-            max(0, (cw.width()  - ov.width())  // 2),
-            max(0, (cw.height() - ov.height()) // 2),
-            ov.width(), ov.height(),
+            max(0, (cw.width()  - w) // 2),
+            max(0, (cw.height() - h) // 2),
+            w, h,
         )
         ov.show()
         ov.raise_()
