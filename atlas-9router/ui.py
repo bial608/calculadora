@@ -4618,6 +4618,7 @@ class DevConsole(QWidget):
                 "/tarefa <objetivo> executa uma tarefa completa sozinho",
                 "/stop              para a tarefa em andamento (ou ESC)",
                 "/diag              testa se o mouse funciona + escala da tela",
+                "/setres 1440x900   força a resolução do alvo (se o /diag mostrar errado)",
                 "/kill              liga/desliga o kill switch (Ctrl+Shift+Alt+K)",
                 "/health            saúde dos componentes",
                 "/audit             últimas ações registradas",
@@ -4669,6 +4670,17 @@ class DevConsole(QWidget):
         elif name == "/diag":
             from actions import task_agent
             self._bg(lambda: (info(task_agent.input_diag())))
+        elif name == "/setres":
+            from memory import config_manager as cm
+            a2 = arg.strip().lower()
+            if a2 in ("", "auto", "0"):
+                cm.save_feature("task_agent_screen", "")
+                ok_("resolução: automática")
+            elif "x" in a2:
+                cm.save_feature("task_agent_screen", a2.replace(" ", ""))
+                ok_(f"resolução forçada: {a2} (vale para o alvo dos cliques)")
+            else:
+                bad("uso: /setres 1440x900  (ou /setres auto)")
         elif name == "/stop":
             from actions import task_agent
             (ok_ if task_agent.stop() else info)("parando a tarefa…" if task_agent.busy()

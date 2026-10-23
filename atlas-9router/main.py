@@ -1,6 +1,27 @@
 import platform as _platform
 import subprocess as _subprocess
 
+# ── DPI awareness — MUST run before Qt (PyQt6) initialises ────────────────────
+# On Windows, display scaling (125%/150% on a laptop) makes a DPI-unaware process
+# see a virtualised, smaller screen: the screenshot, the reported screen size and
+# the mouse then disagree, so the agent's clicks land in the wrong place (or on
+# empty space, which looks like "it didn't click"). The process's DPI mode is
+# LOCKED the first time any GUI call happens — and importing PyQt6 does that — so
+# this has to be the very first thing, before `from ui import ...` below.
+if _platform.system() == "Windows":
+    try:
+        import ctypes as _ctypes
+        try:
+            # per-monitor aware v2 → everything in real, physical pixels
+            _ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+        except Exception:
+            try:
+                _ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                _ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 # ── Nuclear: force CREATE_NO_WINDOW on EVERY subprocess call on Windows ───────
 # This patches Popen itself, so no per-file flag is needed anywhere.
 if _platform.system() == "Windows":

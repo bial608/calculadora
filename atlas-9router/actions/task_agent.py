@@ -90,11 +90,15 @@ _run_lock = threading.Lock()
 
 def _settings() -> dict:
     try:
-        from memory.config_manager import load_api_keys
+        from memory.config_manager import load_api_keys, get_feature
         saved = load_api_keys().get("task_agent") or {}
+        ov = get_feature("task_agent_screen", "")
     except Exception:
-        saved = {}
-    return {**_DEFAULTS, **saved}
+        saved, ov = {}, ""
+    out = {**_DEFAULTS, **saved}
+    if ov:
+        out["screen_override"] = ov
+    return out
 
 
 def stop() -> bool:
@@ -228,12 +232,39 @@ def _img_size() -> tuple[int, int]:
 
 
 def _click_size() -> tuple[int, int]:
-    """The mouse's own coordinate space (what pyautogui.click expects)."""
+    """The mouse's own coordinate space (what pyautogui.click expects).
+
+    A manual override (Recursos → resolução, or /setres) wins, for the rare case
+    where the OS reports the wrong size and auto-detection can't be trusted."""
+    ov = str(_settings().get("screen_override") or "").lower().replace(" ", "")
+    if "x" in ov:
+        try:
+            w, h = ov.split("x", 1)
+            return int(w), int(h)
+        except Exception:
+            pass
     try:
         w, h = pyautogui.size()
         return int(w), int(h)
     except Exception:
         return _img_size()
+
+
+def _do_click(kind: str, px: int, py: int) -> None:
+    """A firm, explicit press. Some Windows apps ignore pyautogui.click's very
+    fast synthetic press, so we move, hold briefly, and release."""
+    try:
+        pyautogui.moveTo(px, py, duration=0.12)
+        time.sleep(0.03)
+        if kind == "double_click":
+            pyautogui.doubleClick(px, py)
+            return
+        button = "right" if kind == "right_click" else "left"
+        pyautogui.mouseDown(x=px, y=py, button=button)
+        time.sleep(0.06)
+        pyautogui.mouseUp(x=px, y=py, button=button)
+    except Exception as e:
+        _emit(f"clique falhou: {e}", "warn")
 
 
 def _norm_to_img(nx: float, ny: float) -> tuple[float, float]:
@@ -378,7 +409,24 @@ def input_diag() -> str:
                           "para o ATLAS/Python",
                 "Windows": "rode o ATLAS como administrador se a janela-alvo for de admin"}
         return f"⛔ o mouse NÃO se move neste sistema. {plat.get(_OS, '')}{dpi}"
-    return f"✔ mouse ok (tela {cw}x{ch}){dpi}"
+    admin = _windows_admin_note()
+    return f"✔ mouse ok (tela {cw}x{ch}){dpi}{admin}"
+
+
+def _windows_admin_note() -> str:
+    """On Windows, a non-elevated ATLAS cannot click an elevated (admin) window.
+    That is the usual cause of 'the mouse moves but clicks do nothing'."""
+    if _OS != "Windows":
+        return ""
+    try:
+        import ctypes
+        is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        if not is_admin:
+            return ("  ·  ⚠ ATLAS NÃO está como administrador: se a janela-alvo for de "
+                    "admin, o Windows ignora os cliques — abra o ATLAS como administrador")
+    except Exception:
+        pass
+    return ""
 
 
 # Checked once per session so a task doesn't start blind.
@@ -442,22 +490,14 @@ def _execute(a: dict) -> str:
             ix, iy = _refine_click(target, ix, iy)
         px, py = _img_to_click(ix, iy)
         px, py = _snap_windows(px, py)
-        pyautogui.moveTo(px, py, duration=0.12)
-        # Did the pointer actually land where we aimed? If not, the OS is not
-        # letting us move the mouse (Wayland, or macOS without Accessibility) —
-        # report that honestly instead of claiming a click that never happened.
-        ok, where = _pointer_at(px, py)
-        if not ok:
-            return (f"⚠ tentei clicar em {px},{py} ({target}) mas o mouse não foi "
-                    f"até lá ({where}). Provável bloqueio do sistema — veja /diag.")
-        if t == "double_click":
-            pyautogui.doubleClick(px, py)
-        elif t == "right_click":
-            pyautogui.rightClick(px, py)
-        else:
-            pyautogui.click(px, py)
+        _do_click(t, px, py)
         _settle()
-        return f"{t} em {px},{py} ({target})"
+        # Verify AFTER clicking — only to ADD a note, never to skip the click
+        # (a failed position read used to cancel real clicks on Windows). A
+        # true "can't move the mouse" system is already caught at task start.
+        ok, where = _pointer_at(px, py)
+        note = "" if ok else f"  ⚠ o ponteiro não confirmou a posição ({where})"
+        return f"{t} em {px},{py} ({target}){note}"
     if t == "type":
         _paste(str(a.get("text") or ""))
         if a.get("enter"):
