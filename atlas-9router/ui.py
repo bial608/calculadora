@@ -5273,16 +5273,12 @@ class AdminOverlay(_HudOverlay):
 
 
 class FleetOverlay(_HudOverlay):
-    """Admin-only: your other computers, controlled over SSH.
-
-    Add a machine (name · host · user), test it, run a command and read the
-    output, open its live desktop (RDP), or copy this PC's SSH key line to
-    authorize it. The transport is plain OpenSSH — see core/fleet.py for why
-    that, and not a homemade server, is the safe way to do this.
-    """
+    """Admin-only: your other computers, found automatically and controlled over
+    SSH. Machines on your Tailscale network appear by themselves (refreshed every
+    5 minutes); the Windows user is detected for you. See core/fleet.py."""
 
     _result_sig = pyqtSignal(str)
-    _OW = 540
+    _OW = 560
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -5322,38 +5318,19 @@ class FleetOverlay(_HudOverlay):
         self._scroll.setWidget(body)
         outer.addWidget(self._scroll, stretch=1)
 
+        top = QHBoxLayout()
         hdr = QLabel("🖧  REDE  ·  meus outros computadores")
         hdr.setFont(_mono(11, True)); hdr.setStyleSheet(f"color: {_TERM_GREEN};")
-        lay.addWidget(hdr)
-        hint = QLabel("Controlo via SSH (OpenSSH, embutido no Windows). Em cada PC: "
-                      "Recursos opcionais → 'OpenSSH Server', depois Start-Service sshd. "
-                      "Login por chave — use 'copiar chave' abaixo. Sem servidor caseiro, "
-                      "sem porta nova: isto só funciona enquanto o SSH estiver ligado lá.")
-        hint.setFont(_mono(7)); hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {C.TEXT_DIM};")
-        lay.addWidget(hint)
+        top.addWidget(hdr, stretch=1)
+        top.addWidget(self._mk_btn("🔄 atualizar", self._refresh_machines))
+        lay.addLayout(top)
+
+        self._status = QLabel("")
+        self._status.setFont(_mono(7)); self._status.setWordWrap(True)
+        lay.addWidget(self._status)
 
         self._mbox = QVBoxLayout(); self._mbox.setSpacing(6)
         lay.addLayout(self._mbox)
-
-        # ── add a machine ─────────────────────────────────────────────────────
-        sep = QLabel("──────  adicionar máquina  ──────")
-        sep.setFont(_mono(8, True)); sep.setStyleSheet(f"color: {_TERM_BLUE};")
-        lay.addWidget(sep)
-        frow = QHBoxLayout(); frow.setSpacing(6)
-        self._f_name = QLineEdit(); self._f_name.setPlaceholderText("nome (ex.: PC sala)")
-        self._f_host = QLineEdit(); self._f_host.setPlaceholderText("IP ou nome na rede")
-        self._f_user = QLineEdit(); self._f_user.setPlaceholderText("usuário do Windows")
-        for e in (self._f_name, self._f_host, self._f_user):
-            e.setFont(_mono(8)); e.setStyleSheet(self._line_css); frow.addWidget(e)
-        lay.addLayout(frow)
-        krow = QHBoxLayout(); krow.setSpacing(6)
-        self._f_key = QLineEdit()
-        self._f_key.setPlaceholderText("caminho da chave (opcional — vazio = chave padrão)")
-        self._f_key.setFont(_mono(8)); self._f_key.setStyleSheet(self._line_css)
-        krow.addWidget(self._f_key, stretch=1)
-        krow.addWidget(self._mk_btn("+ salvar", self._add))
-        lay.addLayout(krow)
 
         # ── run a command ─────────────────────────────────────────────────────
         sep2 = QLabel("──────  rodar comando  ──────")
@@ -5362,7 +5339,7 @@ class FleetOverlay(_HudOverlay):
         crow = QHBoxLayout(); crow.setSpacing(6)
         self._c_machine = QComboBox()
         self._c_machine.setFont(_mono(8)); self._c_machine.setStyleSheet(self._line_css)
-        self._c_machine.setFixedWidth(150)
+        self._c_machine.setFixedWidth(160)
         self._c_cmd = QLineEdit(); self._c_cmd.setPlaceholderText("comando (ex.: shutdown /r /t 0)")
         self._c_cmd.setFont(_mono(8)); self._c_cmd.setStyleSheet(self._line_css)
         self._c_cmd.returnPressed.connect(self._run)
@@ -5370,14 +5347,37 @@ class FleetOverlay(_HudOverlay):
         self._c_run = self._mk_btn("▶ rodar", self._run)
         crow.addWidget(self._c_run)
         lay.addLayout(crow)
-        self._out = QTextEdit(); self._out.setReadOnly(True); self._out.setFixedHeight(110)
+        self._out = QTextEdit(); self._out.setReadOnly(True); self._out.setFixedHeight(104)
         self._out.setFont(_mono(8))
         self._out.setStyleSheet(f"QTextEdit {{ background: #000d08; color: {_TERM_GREEN};"
                                 f" border: 1px solid #0f3d2a; border-radius: 3px; padding: 4px; }}")
         lay.addWidget(self._out)
+
+        # ── manual add (same-house fallback, no Tailscale) ────────────────────
+        sep = QLabel("──────  adicionar manual (mesma casa, sem Tailscale)  ──────")
+        sep.setFont(_mono(7, True)); sep.setStyleSheet(f"color: {C.TEXT_DIM};")
+        lay.addWidget(sep)
+        frow = QHBoxLayout(); frow.setSpacing(6)
+        self._f_name = QLineEdit(); self._f_name.setPlaceholderText("nome")
+        self._f_host = QLineEdit(); self._f_host.setPlaceholderText("IP na rede local")
+        self._f_user = QLineEdit(); self._f_user.setPlaceholderText("usuário")
+        self._f_user.setText(self._fleet.local_user())
+        for e in (self._f_name, self._f_host, self._f_user):
+            e.setFont(_mono(8)); e.setStyleSheet(self._line_css); frow.addWidget(e)
+        frow.addWidget(self._mk_btn("+ salvar", self._add))
+        lay.addLayout(frow)
         lay.addStretch(1)
 
         self._result_sig.connect(self._show_result)
+
+        # Auto-refresh every 5 minutes while the panel is open — the "aparece
+        # sozinho" the user asked for.
+        from PyQt6.QtCore import QTimer
+        self._timer = QTimer(self)
+        self._timer.setInterval(5 * 60 * 1000)
+        self._timer.timeout.connect(self._refresh_machines)
+        self._timer.start()
+
         self._refresh_machines()
 
     def _mk_btn(self, text, slot=None, danger=False):
@@ -5387,14 +5387,14 @@ class FleetOverlay(_HudOverlay):
         b.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {col};"
             f" border: 1px solid {'#5a1420' if danger else '#0f3d2a'};"
-            f" border-radius: 3px; padding: 4px 10px; }}"
+            f" border-radius: 3px; padding: 4px 9px; }}"
             f"QPushButton:hover {{ border-color: {col};"
             f" background: {'#1a0407' if danger else '#001a10'}; }}")
         if slot:
             b.clicked.connect(slot)
         return b
 
-    def _refresh_machines(self):
+    def _clear_box(self):
         while self._mbox.count():
             it = self._mbox.takeAt(0)
             w = it.widget()
@@ -5406,43 +5406,87 @@ class FleetOverlay(_HudOverlay):
                     ww = sub.takeAt(0).widget()
                     if ww:
                         ww.setParent(None)
-        machines = self._fleet.load()
+
+    def _refresh_machines(self):
+        self._clear_box()
+        has_ts = self._fleet.tailscale_available()
+        machines = self._fleet.discover()
+        controllable = [m for m in machines if not m.get("is_self")]
+
+        if not has_ts:
+            self._status.setStyleSheet(f"color: {C.ACC2};")
+            self._status.setText(
+                "Tailscale não encontrado. Para ver e controlar PCs em OUTRAS casas "
+                "(sem IP, sem mexer no roteador): instale o Tailscale em cada PC "
+                "(tailscale.com/download) e entre com a MESMA conta. Eles aparecem aqui "
+                "sozinhos. (Mesma casa, sem Tailscale: use 'adicionar manual' abaixo.)")
+        else:
+            online = sum(1 for m in controllable if m.get("online"))
+            self._status.setStyleSheet(f"color: {_TERM_GREEN};")
+            self._status.setText(f"Tailscale ativo · {len(controllable)} máquina(s), "
+                                 f"{online} online · atualiza sozinho a cada 5 min · "
+                                 f"este PC: {self._fleet.local_user()}")
+
         self._c_machine.clear()
-        if not machines:
-            empty = QLabel("Nenhuma máquina ainda. Adicione uma abaixo.")
+        if not controllable:
+            empty = QLabel("Nenhuma outra máquina ainda.")
             empty.setFont(_mono(8)); empty.setStyleSheet(f"color: {C.TEXT_DIM};")
             self._mbox.addWidget(empty)
             return
-        for m in machines:
+
+        for m in controllable:
             self._c_machine.addItem(m["name"])
-            card = QWidget()
-            card.setStyleSheet("background: #00140d; border: 1px solid #0f3d2a; border-radius: 5px;")
-            cl = QVBoxLayout(card); cl.setContentsMargins(12, 8, 12, 8); cl.setSpacing(4)
-            title = QLabel(f"{m['name']}")
-            title.setFont(_mono(10, True)); title.setStyleSheet(f"color: {C.WHITE};")
-            cl.addWidget(title)
-            meta = QLabel(f"{m['user']}@{m['host']}"
-                          + (f"  ·  chave: {m['key_path']}" if m.get('key_path') else ""))
-            meta.setFont(_mono(7)); meta.setStyleSheet(f"color: {C.TEXT_MED};")
-            cl.addWidget(meta)
-            row = QHBoxLayout(); row.setSpacing(8)
-            name = m["name"]
-            row.addWidget(self._mk_btn("testar", lambda _=False, n=name: self._test(n)))
-            row.addWidget(self._mk_btn("área remota", lambda _=False, n=name: self._rdp(n)))
-            row.addWidget(self._mk_btn("copiar chave", lambda _=False, n=name: self._copy_key(n)))
+            self._mbox.addWidget(self._machine_card(m))
+
+    def _machine_card(self, m: dict) -> "QWidget":
+        name = m["name"]
+        online = m.get("online")
+        dot = "🟢" if online else ("⚪" if online is False else "·")
+        card = QWidget()
+        card.setStyleSheet("background: #00140d; border: 1px solid #0f3d2a; border-radius: 5px;")
+        cl = QVBoxLayout(card); cl.setContentsMargins(12, 8, 12, 8); cl.setSpacing(4)
+        tags = []
+        if m.get("source") == "tailscale":
+            tags.append("tailscale")
+        if m.get("os"):
+            tags.append(m["os"])
+        title = QLabel(f"{dot}  {name}" + (f"   ({' · '.join(tags)})" if tags else ""))
+        title.setFont(_mono(10, True)); title.setStyleSheet(f"color: {C.WHITE};")
+        cl.addWidget(title)
+
+        urow = QHBoxLayout(); urow.setSpacing(6)
+        ul = QLabel("usuário:"); ul.setFont(_mono(7)); ul.setStyleSheet(f"color: {C.TEXT_MED};")
+        urow.addWidget(ul)
+        uedit = QLineEdit(m.get("user", "")); uedit.setFont(_mono(8))
+        uedit.setStyleSheet(self._line_css); uedit.setFixedWidth(130)
+        urow.addWidget(uedit)
+        urow.addWidget(self._mk_btn("salvar", lambda _=False, n=name, e=uedit: self._save_user(n, e)))
+        hostlbl = QLabel(f"@ {m['host']}"); hostlbl.setFont(_mono(7))
+        hostlbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        urow.addWidget(hostlbl); urow.addStretch(1)
+        cl.addLayout(urow)
+
+        row = QHBoxLayout(); row.setSpacing(8)
+        row.addWidget(self._mk_btn("testar", lambda _=False, n=name: self._test(n)))
+        row.addWidget(self._mk_btn("área remota", lambda _=False, n=name: self._rdp(n)))
+        row.addWidget(self._mk_btn("copiar chave", lambda _=False, n=name: self._copy_key(n)))
+        if m.get("source") == "manual":
             row.addWidget(self._mk_btn("apagar", lambda _=False, n=name: self._remove(n), danger=True))
-            row.addStretch(1)
-            cl.addLayout(row)
-            self._mbox.addWidget(card)
+        row.addStretch(1)
+        cl.addLayout(row)
+        return card
 
     # — actions —
+    def _save_user(self, name, edit):
+        if self._fleet.set_user(name, edit.text().strip()):
+            self._show_result(f"Usuário de '{name}' salvo: {edit.text().strip()}")
+            self._refresh_machines()
+
     def _add(self):
-        ok, msg = self._fleet.add(self._f_name.text(), self._f_host.text(),
-                                  self._f_user.text(), self._f_key.text())
+        ok, msg = self._fleet.add(self._f_name.text(), self._f_host.text(), self._f_user.text())
         self._show_result(("✅ " if ok else "⚠️ ") + msg)
         if ok:
-            for e in (self._f_name, self._f_host, self._f_user, self._f_key):
-                e.clear()
+            self._f_name.clear(); self._f_host.clear()
             self._refresh_machines()
 
     def _remove(self, name):
@@ -5456,8 +5500,9 @@ class FleetOverlay(_HudOverlay):
             QApplication.clipboard().setText(line)
         except Exception:
             pass
-        self._show_result("Linha para autorizar a chave copiada. Cole no PowerShell "
-                           "deste PC (vai pedir a senha da outra máquina uma vez):\n\n" + line)
+        self._show_result("Linha para autorizar a chave copiada. Cole no PowerShell deste PC "
+                          "(pede a senha da outra máquina uma vez). Com o Tailscale SSH ligado, "
+                          "você nem precisa disto:\n\n" + line)
 
     def _rdp(self, name):
         ok, msg = self._fleet.open_rdp(name)
@@ -5482,8 +5527,6 @@ class FleetOverlay(_HudOverlay):
         self._bg(lambda: self._fleet.run(name, cmd), name, cmd)
 
     def _bg(self, fn, name, label):
-        """Run SSH off the UI thread so a slow/unreachable box never freezes
-        the window; the result comes back through a signal."""
         import threading
 
         def work():
@@ -5498,6 +5541,7 @@ class FleetOverlay(_HudOverlay):
     def _show_result(self, text: str):
         self._busy(False)
         self._out.setPlainText(text)
+
 
 
 class NineRouterOverlay(_HudOverlay):
